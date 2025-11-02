@@ -29,13 +29,17 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     setInput('');
     setLoading(true);
 
+    // Optimistically add user message to UI
+    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+
     try {
       const response = await chatService.current.sendMessage(userMessage);
 
-      // Update messages with history from server
-      if (response.history && response.history.length > 0) {
-        setMessages(response.history);
-      }
+      // Add only the LLM response from backend
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: response.response },
+      ]);
       setLoading(false);
     } catch (error) {
       console.error('Error sending message:', error);

@@ -9,7 +9,6 @@ export interface ChatMessage {
 export interface ChatResponse {
   response: string;
   error?: string;
-  history?: Message[];
 }
 
 export interface Message {

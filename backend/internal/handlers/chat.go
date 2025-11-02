@@ -15,9 +15,8 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-	Response string        `json:"response"`
-	Error    string        `json:"error,omitempty"`
-	History  []llm.Message `json:"history,omitempty"`
+	Response string `json:"response"`
+	Error    string `json:"error,omitempty"`
 }
 
 type ChatHandlers struct {
@@ -78,12 +77,10 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add assistant response to conversation history
 	session.AddAssistantMessage(response)
-	updatedHistory := session.GetMessages()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
 		Response: response,
-		History:  updatedHistory,
 	})
 }
 
