@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // User represents a user in the database
 type User struct {
-	ID           int
+	ID           string
 	Username     string
 	Email        string
 	PasswordHash string
@@ -27,16 +28,16 @@ func CreateUser(username, email, password string) (*User, error) {
 		return nil, fmt.Errorf("error hashing password: %w", err)
 	}
 
-	var userID int
+	userID := uuid.New().String()
 	var createdAt string
 
 	query := `
-	INSERT INTO users (username, email, password_hash)
-	VALUES ($1, $2, $3)
+	INSERT INTO users (id, username, email, password_hash)
+	VALUES ($1, $2, $3, $4)
 	RETURNING id, created_at
 	`
 
-	err = db.QueryRow(query, username, email, string(hashedPassword)).Scan(&userID, &createdAt)
+	err = db.QueryRow(query, userID, username, email, string(hashedPassword)).Scan(&userID, &createdAt)
 	if err != nil {
 		if err.Error() == "pq: duplicate key value violates unique constraint \"users_username_key\"" {
 			return nil, fmt.Errorf("username already exists")
@@ -44,7 +45,7 @@ func CreateUser(username, email, password string) (*User, error) {
 		return nil, fmt.Errorf("error creating user: %w", err)
 	}
 
-	log.Printf("[DB] Created new user: %s (id: %d)", username, userID)
+	log.Printf("[DB] Created new user: %s (id: %s)", username, userID)
 
 	return &User{
 		ID:        userID,

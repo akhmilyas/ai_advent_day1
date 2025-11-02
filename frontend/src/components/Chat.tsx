@@ -18,7 +18,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<number | undefined>(undefined);
+  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [conversationTitle, setConversationTitle] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
@@ -44,7 +44,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     localStorage.setItem('systemPrompt', prompt);
   };
 
-  const handleSelectConversation = async (convId: number, title: string) => {
+  const handleSelectConversation = async (convId: string, title: string) => {
     try {
       const convMessages = await chatService.current.getConversationMessages(convId);
       setConversationId(convId);

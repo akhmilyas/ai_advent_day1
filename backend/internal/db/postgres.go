@@ -104,7 +104,7 @@ func createTables() error {
 	// Create users table
 	usersTableSQL := `
 	CREATE TABLE IF NOT EXISTS users (
-		id SERIAL PRIMARY KEY,
+		id UUID PRIMARY KEY,
 		username VARCHAR(255) UNIQUE NOT NULL,
 		email VARCHAR(255),
 		password_hash VARCHAR(255) NOT NULL,
@@ -120,8 +120,8 @@ func createTables() error {
 	// Create conversations table
 	conversationsTableSQL := `
 	CREATE TABLE IF NOT EXISTS conversations (
-		id SERIAL PRIMARY KEY,
-		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		id UUID PRIMARY KEY,
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		title VARCHAR(255),
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -136,8 +136,8 @@ func createTables() error {
 	// Create messages table
 	messagesTableSQL := `
 	CREATE TABLE IF NOT EXISTS messages (
-		id SERIAL PRIMARY KEY,
-		conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+		id UUID PRIMARY KEY,
+		conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
 		role VARCHAR(50) NOT NULL,
 		content TEXT NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

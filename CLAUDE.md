@@ -119,21 +119,31 @@ Backend: Saves full response to DB after streaming completes
 - No Redux/complex state library; useContext for theme, useState for component local state
 - localStorage for persistence: auth_token, theme, systemPrompt
 
+### UUID for All IDs
+- All database IDs use PostgreSQL UUID type (Universally Unique Identifiers)
+- Backend: Uses `github.com/google/uuid` v1.3.0 for UUID generation
+- User IDs, Conversation IDs, and Message IDs are all UUIDs (string type in Go)
+- Frontend: All ID types changed from `number` to `string` to accommodate UUID strings
+- Benefits: Better distributed system support, higher collision resistance, cryptographic strength
+- In SSE metadata, conversation IDs are sent as plain UUID strings (CONV_ID:uuid-string format)
+
 ## Database Schema
 
 ```sql
-users (id, username, email, password_hash, created_at)
+users (id UUID PRIMARY KEY, username VARCHAR UNIQUE, email VARCHAR, password_hash VARCHAR, created_at TIMESTAMP)
   ↓
-conversations (id, user_id, title, created_at, updated_at)
+conversations (id UUID PRIMARY KEY, user_id UUID REFERENCES users, title VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP)
   ↓
-messages (id, conversation_id, role, content, created_at)
+messages (id UUID PRIMARY KEY, conversation_id UUID REFERENCES conversations, role VARCHAR, content TEXT, created_at TIMESTAMP)
 ```
 
 **Key Features:**
+- All IDs are UUID type for distributed system compatibility and collision resistance
 - Conversations auto-created on first message with first 100 chars as title
 - Messages store role ('user' or 'assistant') for history reconstruction
 - Cascade deletes prevent orphaned records
 - Indexes on user_id and conversation_id for query performance
+- UUIDs generated on the backend using `google/uuid` package
 
 ## Configuration
 

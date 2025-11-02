@@ -4,9 +4,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 
 interface SidebarProps {
-  onSelectConversation: (conversationId: number, title: string) => void;
+  onSelectConversation: (conversationId: string, title: string) => void;
   onNewConversation: () => void;
-  currentConversationId?: number;
+  currentConversationId?: string;
   onRefreshConversations?: (callback: () => Promise<void>) => void;
 }
 

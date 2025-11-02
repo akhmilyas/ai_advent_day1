@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Conversation represents a conversation in the database
 type Conversation struct {
-	ID        int
-	UserID    int
+	ID        string
+	UserID    string
 	Title     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -18,32 +20,32 @@ type Conversation struct {
 
 // Message represents a message in a conversation
 type Message struct {
-	ID             int
-	ConversationID int
+	ID             string
+	ConversationID string
 	Role           string
 	Content        string
 	CreatedAt      time.Time
 }
 
 // CreateConversation creates a new conversation for a user
-func CreateConversation(userID int, title string) (*Conversation, error) {
+func CreateConversation(userID string, title string) (*Conversation, error) {
 	db := GetDB()
 
-	var convID int
+	convID := uuid.New().String()
 	var createdAt, updatedAt time.Time
 
 	query := `
-	INSERT INTO conversations (user_id, title)
-	VALUES ($1, $2)
+	INSERT INTO conversations (id, user_id, title)
+	VALUES ($1, $2, $3)
 	RETURNING id, created_at, updated_at
 	`
 
-	err := db.QueryRow(query, userID, title).Scan(&convID, &createdAt, &updatedAt)
+	err := db.QueryRow(query, convID, userID, title).Scan(&convID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("error creating conversation: %w", err)
 	}
 
-	log.Printf("[DB] Created new conversation: %d for user: %d", convID, userID)
+	log.Printf("[DB] Created new conversation: %s for user: %s", convID, userID)
 
 	return &Conversation{
 		ID:        convID,
@@ -55,7 +57,7 @@ func CreateConversation(userID int, title string) (*Conversation, error) {
 }
 
 // GetConversationsByUser retrieves all conversations for a user
-func GetConversationsByUser(userID int) ([]Conversation, error) {
+func GetConversationsByUser(userID string) ([]Conversation, error) {
 	db := GetDB()
 
 	query := `
@@ -84,7 +86,7 @@ func GetConversationsByUser(userID int) ([]Conversation, error) {
 }
 
 // GetConversation retrieves a specific conversation
-func GetConversation(convID int) (*Conversation, error) {
+func GetConversation(convID string) (*Conversation, error) {
 	db := GetDB()
 
 	var conv Conversation
@@ -103,19 +105,19 @@ func GetConversation(convID int) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func AddMessage(conversationID int, role, content string) (*Message, error) {
+func AddMessage(conversationID string, role, content string) (*Message, error) {
 	db := GetDB()
 
-	var msgID int
+	msgID := uuid.New().String()
 	var createdAt time.Time
 
 	query := `
-	INSERT INTO messages (conversation_id, role, content)
-	VALUES ($1, $2, $3)
+	INSERT INTO messages (id, conversation_id, role, content)
+	VALUES ($1, $2, $3, $4)
 	RETURNING id, created_at
 	`
 
-	err := db.QueryRow(query, conversationID, role, content).Scan(&msgID, &createdAt)
+	err := db.QueryRow(query, msgID, conversationID, role, content).Scan(&msgID, &createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("error adding message: %w", err)
 	}
@@ -126,7 +128,7 @@ func AddMessage(conversationID int, role, content string) (*Message, error) {
 		log.Printf("[DB] Warning: error updating conversation timestamp: %v", err)
 	}
 
-	log.Printf("[DB] Added message to conversation %d", conversationID)
+	log.Printf("[DB] Added message to conversation %s", conversationID)
 
 	return &Message{
 		ID:             msgID,
@@ -138,7 +140,7 @@ func AddMessage(conversationID int, role, content string) (*Message, error) {
 }
 
 // GetConversationMessages retrieves all messages from a conversation in LLM format
-func GetConversationMessages(conversationID int) ([]llm.Message, error) {
+func GetConversationMessages(conversationID string) ([]llm.Message, error) {
 	db := GetDB()
 
 	query := `
@@ -170,7 +172,7 @@ func GetConversationMessages(conversationID int) ([]llm.Message, error) {
 }
 
 // GetConversationMessagesWithDetails retrieves all messages with full details for frontend display
-func GetConversationMessagesWithDetails(conversationID int) ([]Message, error) {
+func GetConversationMessagesWithDetails(conversationID string) ([]Message, error) {
 	db := GetDB()
 
 	query := `
@@ -199,7 +201,7 @@ func GetConversationMessagesWithDetails(conversationID int) ([]Message, error) {
 }
 
 // DeleteConversation deletes a conversation and all its messages
-func DeleteConversation(convID int) error {
+func DeleteConversation(convID string) error {
 	db := GetDB()
 
 	query := `DELETE FROM conversations WHERE id = $1`
@@ -208,7 +210,7 @@ func DeleteConversation(convID int) error {
 		return fmt.Errorf("error deleting conversation: %w", err)
 	}
 
-	log.Printf("[DB] Deleted conversation: %d", convID)
+	log.Printf("[DB] Deleted conversation: %s", convID)
 	return nil
 }
 

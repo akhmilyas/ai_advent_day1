@@ -12,21 +12,21 @@ export interface Message {
 }
 
 export interface Conversation {
-  id: number;
+  id: string;
   title: string;
   created_at: string;
   updated_at: string;
 }
 
 export interface ConversationMessage {
-  id: number;
+  id: string;
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
 }
 
 export type OnChunkCallback = (chunk: string) => void;
-export type OnConversationCallback = (conversationId: number) => void;
+export type OnConversationCallback = (conversationId: string) => void;
 export type OnModelCallback = (model: string) => void;
 
 export class ChatService {
@@ -34,7 +34,7 @@ export class ChatService {
     message: string,
     onChunk: OnChunkCallback,
     onConversation?: OnConversationCallback,
-    conversationId?: number,
+    conversationId?: string,
     onModel?: OnModelCallback,
     systemPrompt?: string
   ): Promise<void> {
@@ -81,8 +81,8 @@ export class ChatService {
 
             // Check for conversation ID metadata
             if (content.startsWith('CONV_ID:')) {
-              const convId = parseInt(content.slice(8), 10);
-              if (!isNaN(convId) && onConversation) {
+              const convId = content.slice(8);
+              if (convId && onConversation) {
                 onConversation(convId);
               }
             }
@@ -124,7 +124,7 @@ export class ChatService {
     return data.conversations || [];
   }
 
-  async getConversationMessages(conversationId: number): Promise<ConversationMessage[]> {
+  async getConversationMessages(conversationId: string): Promise<ConversationMessage[]> {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
       method: 'GET',
       headers: {
@@ -141,7 +141,7 @@ export class ChatService {
     return data.messages || [];
   }
 
-  async deleteConversation(conversationId: number): Promise<void> {
+  async deleteConversation(conversationId: string): Promise<void> {
     const response = await fetch(`${API_URL}/api/conversations/${conversationId}`, {
       method: 'DELETE',
       headers: {

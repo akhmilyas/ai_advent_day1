@@ -119,9 +119,11 @@ DB_SSLMODE=disable
 
 ## Tech Stack
 
-**Backend**: Go 1.25.3, PostgreSQL 13, jwt-go, bcrypt
+**Backend**: Go 1.25.3, PostgreSQL 13, jwt-go, bcrypt, google/uuid
 **Frontend**: React 18, TypeScript, react-markdown, remark-gfm
 **Deployment**: Docker, Docker Compose
+
+**IDs**: All database IDs use UUID (Universally Unique Identifiers) for better distributed system support and collision resistance
 
 ## Features
 

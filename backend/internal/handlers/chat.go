@@ -14,19 +14,19 @@ import (
 type ChatRequest struct {
 	Message         string        `json:"message,omitempty"`
 	Messages        []llm.Message `json:"messages,omitempty"`
-	ConversationID  int           `json:"conversation_id,omitempty"`
+	ConversationID  string        `json:"conversation_id,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
 }
 
 type ChatResponse struct {
 	Response       string `json:"response"`
-	ConversationID int    `json:"conversation_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
 type ConversationInfo struct {
-	ID        int    `json:"id"`
+	ID        string `json:"id"`
 	Title     string `json:"title"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -37,7 +37,7 @@ type ConversationsResponse struct {
 }
 
 type MessageData struct {
-	ID        int    `json:"id"`
+	ID        string `json:"id"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
 	CreatedAt string `json:"created_at"`
@@ -91,7 +91,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get or create conversation
 	var conversation *db.Conversation
-	if req.ConversationID > 0 {
+	if req.ConversationID != "" {
 		conversation, err = db.GetConversation(req.ConversationID)
 		if err != nil {
 			log.Printf("[CHAT] Error getting conversation: %v", err)
@@ -196,7 +196,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Get or create conversation
 	var conversation *db.Conversation
-	if req.ConversationID > 0 {
+	if req.ConversationID != "" {
 		conversation, err = db.GetConversation(req.ConversationID)
 		if err != nil {
 			log.Printf("[CHAT] Error getting conversation: %v", err)
@@ -343,16 +343,8 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 // GetConversationMessagesHandler returns all messages from a specific conversation
 func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(auth.UserContextKey).(string)
-	convIDStr := r.PathValue("id")
-	log.Printf("Get conversation messages request from user: %s for conversation: %s", username, convIDStr)
-
-	// Parse conversation ID
-	var convID int
-	_, err := fmt.Sscanf(convIDStr, "%d", &convID)
-	if err != nil {
-		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
-		return
-	}
+	convID := r.PathValue("id")
+	log.Printf("Get conversation messages request from user: %s for conversation: %s", username, convID)
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
@@ -404,16 +396,8 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 // DeleteConversationHandler deletes a specific conversation
 func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(auth.UserContextKey).(string)
-	convIDStr := r.PathValue("id")
-	log.Printf("Delete conversation request from user: %s for conversation: %s", username, convIDStr)
-
-	// Parse conversation ID
-	var convID int
-	_, err := fmt.Sscanf(convIDStr, "%d", &convID)
-	if err != nil {
-		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
-		return
-	}
+	convID := r.PathValue("id")
+	log.Printf("Delete conversation request from user: %s for conversation: %s", username, convID)
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
