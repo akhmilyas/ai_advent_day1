@@ -12,14 +12,20 @@ export interface ChatResponse {
   error?: string;
 }
 
+export interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface WSMessage {
   type: 'start' | 'chunk' | 'end' | 'error';
   content: string;
+  history?: Message[];
 }
 
 export type StreamCallback = (chunk: string) => void;
 export type ErrorCallback = (error: string) => void;
-export type CompleteCallback = () => void;
+export type CompleteCallback = (history?: Message[]) => void;
 
 export class ChatService {
   private ws: WebSocket | null = null;
@@ -75,7 +81,8 @@ export class ChatService {
             onChunk(message.content);
             break;
           case 'end':
-            onComplete();
+            // Pass conversation history from backend
+            onComplete(message.history);
             break;
           case 'error':
             onError(message.content);

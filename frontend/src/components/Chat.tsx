@@ -1,13 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChatService } from '../services/chat';
+import { ChatService, Message } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-}
 
 interface ChatProps {
   onLogout: () => void;
@@ -34,11 +29,20 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         setLoading(false);
         setStreamingContent('');
       },
-      () => {
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: streamingContent },
-        ]);
+      (history) => {
+        // History received from backend - update messages
+        if (history && history.length > 0) {
+          setMessages(history.map((msg) => ({
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content,
+          })));
+        } else {
+          // Fallback: add streamed content as assistant message
+          setMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: streamingContent },
+          ]);
+        }
         setStreamingContent('');
         setLoading(false);
       }
@@ -47,7 +51,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     return () => {
       chatService.current.disconnectStream();
     };
-  }, [streamingContent]);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -59,18 +63,19 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
     const userMessage = input.trim();
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
     setLoading(true);
     setStreamingContent('');
 
     try {
       if (chatService.current.isConnected()) {
+        // Send only the message - server manages history
         chatService.current.sendStreamMessage(userMessage);
       } else {
         // Fallback to REST API if WebSocket is not connected
         const response = await chatService.current.sendMessage(userMessage);
         setMessages((prev) => [
           ...prev,
+          { role: 'user', content: userMessage },
           { role: 'assistant', content: response },
         ]);
         setLoading(false);
