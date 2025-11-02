@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 )
 
 type ChatRequest struct {
@@ -250,8 +251,10 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Stream chunks to client using SSE format
 	for chunk := range chunks {
 		fullResponse += chunk
+		// Escape newlines in chunk for SSE format
+		escapedChunk := strings.ReplaceAll(chunk, "\n", "\\n")
 		// Send chunk as SSE event
-		fmt.Fprintf(w, "data: %s\n\n", chunk)
+		fmt.Fprintf(w, "data: %s\n\n", escapedChunk)
 		flusher.Flush()
 		log.Printf("[CHAT] Sent chunk: %q", chunk)
 	}

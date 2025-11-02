@@ -101,7 +101,9 @@ export class ChatService {
             }
             // Skip [DONE] and empty events
             else if (content && content !== '[DONE]') {
-              onChunk(content);
+              // Unescape newlines from SSE format
+              const unescapedContent = content.replace(/\\n/g, '\n');
+              onChunk(unescapedContent);
             }
           }
         }
