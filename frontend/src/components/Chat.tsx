@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { ChatService, Message } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
@@ -14,6 +15,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -37,19 +39,27 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
     try {
       // Stream the response and update the assistant message
-      await chatService.current.streamMessage(userMessage, (chunk) => {
-        // Update the last message (assistant) with the new chunk
-        setMessages((prev) => {
-          const updated = [...prev];
-          if (updated[updated.length - 1].role === 'assistant') {
-            updated[updated.length - 1] = {
-              ...updated[updated.length - 1],
-              content: updated[updated.length - 1].content + chunk,
-            };
-          }
-          return updated;
-        });
-      });
+      await chatService.current.streamMessage(
+        userMessage,
+        (chunk) => {
+          // Update the last message (assistant) with the new chunk
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated[updated.length - 1].role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                content: updated[updated.length - 1].content + chunk,
+              };
+            }
+            return updated;
+          });
+        },
+        (convId) => {
+          // Set conversation ID when received from server
+          setConversationId(convId);
+        },
+        conversationId
+      );
       setLoading(false);
     } catch (error) {
       console.error('Error sending message:', error);
@@ -131,7 +141,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             <div style={{ ...styles.messageRole, opacity: 0.7 }}>
               {msg.role === 'user' ? 'You' : 'AI'}
             </div>
-            <div style={styles.messageContent}>{msg.content}</div>
+            <div style={styles.messageContent}>
+              {msg.role === 'assistant' ? (
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              ) : (
+                msg.content
+              )}
+            </div>
           </div>
         ))}
 

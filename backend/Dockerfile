@@ -5,10 +5,12 @@ WORKDIR /app
 
 # Copy go mod files
 COPY go.mod go.sum* ./
-RUN go mod download
 
 # Copy source code
 COPY . .
+
+# Download and tidy modules
+RUN go mod download && go mod tidy
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server

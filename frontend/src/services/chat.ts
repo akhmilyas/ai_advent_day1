@@ -8,6 +8,7 @@ export interface ChatMessage {
 
 export interface ChatResponse {
   response: string;
+  conversation_id?: number;
   error?: string;
 }
 
@@ -17,16 +18,22 @@ export interface Message {
 }
 
 export type OnChunkCallback = (chunk: string) => void;
+export type OnConversationCallback = (conversationId: number) => void;
 
 export class ChatService {
-  async sendMessage(message: string): Promise<ChatResponse> {
+  async sendMessage(message: string, conversationId?: number): Promise<ChatResponse> {
+    const payload: any = { message };
+    if (conversationId) {
+      payload.conversation_id = conversationId;
+    }
+
     const response = await fetch(`${API_URL}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...AuthService.getAuthHeader(),
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -41,14 +48,24 @@ export class ChatService {
     return data;
   }
 
-  async streamMessage(message: string, onChunk: OnChunkCallback): Promise<void> {
+  async streamMessage(
+    message: string,
+    onChunk: OnChunkCallback,
+    onConversation?: OnConversationCallback,
+    conversationId?: number
+  ): Promise<void> {
+    const payload: any = { message };
+    if (conversationId) {
+      payload.conversation_id = conversationId;
+    }
+
     const response = await fetch(`${API_URL}/api/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...AuthService.getAuthHeader(),
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -75,8 +92,15 @@ export class ChatService {
           if (line.startsWith('data: ')) {
             const content = line.slice(6);
 
+            // Check for conversation ID metadata
+            if (content.startsWith('CONV_ID:')) {
+              const convId = parseInt(content.slice(8), 10);
+              if (!isNaN(convId) && onConversation) {
+                onConversation(convId);
+              }
+            }
             // Skip [DONE] and empty events
-            if (content && content !== '[DONE]') {
+            else if (content && content !== '[DONE]') {
               onChunk(content);
             }
           }

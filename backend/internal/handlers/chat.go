@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"chat-app/internal/auth"
-	"chat-app/internal/conversation"
+	"chat-app/internal/db"
 	"chat-app/internal/llm"
 	"encoding/json"
 	"fmt"
@@ -11,23 +11,32 @@ import (
 )
 
 type ChatRequest struct {
-	Message  string          `json:"message,omitempty"`
-	Messages []llm.Message   `json:"messages,omitempty"`
+	Message         string      `json:"message,omitempty"`
+	Messages        []llm.Message `json:"messages,omitempty"`
+	ConversationID  int         `json:"conversation_id,omitempty"`
 }
 
 type ChatResponse struct {
-	Response string `json:"response"`
-	Error    string `json:"error,omitempty"`
+	Response       string `json:"response"`
+	ConversationID int    `json:"conversation_id,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
-type ChatHandlers struct {
-	sessionManager *conversation.SessionManager
+type ConversationInfo struct {
+	ID        int    `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
-func NewChatHandlers(sm *conversation.SessionManager) *ChatHandlers {
-	return &ChatHandlers{
-		sessionManager: sm,
-	}
+type ConversationsResponse struct {
+	Conversations []ConversationInfo `json:"conversations"`
+}
+
+type ChatHandlers struct{}
+
+func NewChatHandlers() *ChatHandlers {
+	return &ChatHandlers{}
 }
 
 // ChatHandler is the REST endpoint for chat
@@ -53,13 +62,57 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] User input: %s", req.Message)
 
-	// Create a simple session ID based on username for per-user history
-	sessionID := username
-	session := ch.sessionManager.GetOrCreateSession(sessionID, username)
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[CHAT] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
 
-	// Add user message to conversation history
-	session.AddUserMessage(req.Message)
-	currentHistory := session.GetMessages()
+	// Get or create conversation
+	var conversation *db.Conversation
+	if req.ConversationID > 0 {
+		conversation, err = db.GetConversation(req.ConversationID)
+		if err != nil {
+			log.Printf("[CHAT] Error getting conversation: %v", err)
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+		// Verify user owns this conversation
+		if conversation.UserID != user.ID {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+	} else {
+		// Create new conversation with first message as title
+		title := req.Message
+		if len(title) > 100 {
+			title = title[:100]
+		}
+		conversation, err = db.CreateConversation(user.ID, title)
+		if err != nil {
+			log.Printf("[CHAT] Error creating conversation: %v", err)
+			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Add user message to database
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message); err != nil {
+		log.Printf("[CHAT] Error adding user message: %v", err)
+		http.Error(w, "Error saving message", http.StatusInternalServerError)
+		return
+	}
+
+	// Get conversation history
+	currentHistory, err := db.GetConversationMessages(conversation.ID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting conversation history: %v", err)
+		http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
+		return
+	}
+
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Get response with full conversation history
@@ -76,12 +129,17 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] LLM response: %s", response)
 
-	// Add assistant response to conversation history
-	session.AddAssistantMessage(response)
+	// Add assistant response to database
+	if _, err := db.AddMessage(conversation.ID, "assistant", response); err != nil {
+		log.Printf("[CHAT] Error adding assistant message: %v", err)
+		http.Error(w, "Error saving response", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
-		Response: response,
+		Response:       response,
+		ConversationID: conversation.ID,
 	})
 }
 
@@ -108,13 +166,57 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	log.Printf("[CHAT] User input (stream): %s", req.Message)
 
-	// Create a simple session ID based on username for per-user history
-	sessionID := username
-	session := ch.sessionManager.GetOrCreateSession(sessionID, username)
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[CHAT] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
 
-	// Add user message to conversation history
-	session.AddUserMessage(req.Message)
-	currentHistory := session.GetMessages()
+	// Get or create conversation
+	var conversation *db.Conversation
+	if req.ConversationID > 0 {
+		conversation, err = db.GetConversation(req.ConversationID)
+		if err != nil {
+			log.Printf("[CHAT] Error getting conversation: %v", err)
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+		// Verify user owns this conversation
+		if conversation.UserID != user.ID {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+	} else {
+		// Create new conversation with first message as title
+		title := req.Message
+		if len(title) > 100 {
+			title = title[:100]
+		}
+		conversation, err = db.CreateConversation(user.ID, title)
+		if err != nil {
+			log.Printf("[CHAT] Error creating conversation: %v", err)
+			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Add user message to database
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message); err != nil {
+		log.Printf("[CHAT] Error adding user message: %v", err)
+		http.Error(w, "Error saving message", http.StatusInternalServerError)
+		return
+	}
+
+	// Get conversation history
+	currentHistory, err := db.GetConversationMessages(conversation.ID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting conversation history: %v", err)
+		http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
+		return
+	}
+
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Set SSE headers
@@ -137,6 +239,11 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Send conversation ID as first event
+	fmt.Fprintf(w, "data: CONV_ID:%d\n\n", conversation.ID)
+	flusher.Flush()
+	log.Printf("[CHAT] Sent conversation ID: %d", conversation.ID)
+
 	// Buffer to accumulate the full response
 	var fullResponse string
 
@@ -149,9 +256,11 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		log.Printf("[CHAT] Sent chunk: %q", chunk)
 	}
 
-	// Add assistant response to conversation history after streaming completes
+	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		session.AddAssistantMessage(fullResponse)
+		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse); err != nil {
+			log.Printf("[CHAT] Error adding assistant message: %v", err)
+		}
 		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
 	}
 
@@ -160,3 +269,45 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	flusher.Flush()
 }
 
+// GetConversationsHandler returns all conversations for the authenticated user
+func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.Context().Value(auth.UserContextKey).(string)
+	log.Printf("Get conversations request from user: %s", username)
+
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[CHAT] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get all conversations for user
+	conversations, err := db.GetConversationsByUser(user.ID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting conversations: %v", err)
+		http.Error(w, "Error retrieving conversations", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	convInfos := make([]ConversationInfo, 0, len(conversations))
+	for _, conv := range conversations {
+		convInfos = append(convInfos, ConversationInfo{
+			ID:        conv.ID,
+			Title:     conv.Title,
+			CreatedAt: conv.CreatedAt.String(),
+			UpdatedAt: conv.UpdatedAt.String(),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ConversationsResponse{
+		Conversations: convInfos,
+	})
+}

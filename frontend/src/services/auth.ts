@@ -5,7 +5,18 @@ export interface LoginCredentials {
   password: string;
 }
 
+export interface RegisterCredentials {
+  username: string;
+  email: string;
+  password: string;
+}
+
 export interface LoginResponse {
+  token: string;
+}
+
+export interface RegisterResponse {
+  message: string;
   token: string;
 }
 
@@ -22,10 +33,30 @@ export class AuthService {
     });
 
     if (!response.ok) {
-      throw new Error('Login failed');
+      const error = await response.text();
+      throw new Error(error || 'Login failed');
     }
 
     const data: LoginResponse = await response.json();
+    this.setToken(data.token);
+    return data.token;
+  }
+
+  static async register(credentials: RegisterCredentials): Promise<string> {
+    const response = await fetch(`${API_URL}/api/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(credentials),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || 'Registration failed');
+    }
+
+    const data: RegisterResponse = await response.json();
     this.setToken(data.token);
     return data.token;
   }

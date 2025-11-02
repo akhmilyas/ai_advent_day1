@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"chat-app/internal/db"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -30,9 +32,15 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
-// Simple in-memory user store (replace with database in production)
-var users = map[string]string{
-	"demo": "demo123",
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type RegisterResponse struct {
+	Message string `json:"message"`
+	Token   string `json:"token"`
 }
 
 func GenerateToken(username string) (string, error) {
@@ -64,6 +72,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	return nil, jwt.ErrSignatureInvalid
 }
 
+// LoginHandler authenticates user and returns JWT token
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -76,20 +85,91 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	password, exists := users[req.Username]
-	if !exists || password != req.Password {
+	if req.Username == "" || req.Password == "" {
+		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get user from database
+	user, err := db.GetUserByUsername(req.Username)
+	if err != nil {
+		log.Printf("[AUTH] Login failed for user %s: user not found", req.Username)
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
+	// Verify password
+	if !user.VerifyPassword(req.Password) {
+		log.Printf("[AUTH] Login failed for user %s: invalid password", req.Username)
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Generate JWT token
 	token, err := GenerateToken(req.Username)
 	if err != nil {
+		log.Printf("[AUTH] Error generating token: %v", err)
 		http.Error(w, "Error generating token", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("[AUTH] User %s logged in successfully", req.Username)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(LoginResponse{Token: token})
+}
+
+// RegisterHandler creates a new user account
+func RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Password) < 6 {
+		http.Error(w, "Password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+
+	// Create user in database
+	user, err := db.CreateUser(req.Username, req.Email, req.Password)
+	if err != nil {
+		log.Printf("[AUTH] Registration failed for user %s: %v", req.Username, err)
+		if err.Error() == "username already exists" {
+			http.Error(w, "Username already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Error creating user", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate JWT token
+	token, err := GenerateToken(user.Username)
+	if err != nil {
+		log.Printf("[AUTH] Error generating token: %v", err)
+		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[AUTH] User %s registered successfully", user.Username)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(RegisterResponse{
+		Message: "User registered successfully",
+		Token:   token,
+	})
 }
 
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
