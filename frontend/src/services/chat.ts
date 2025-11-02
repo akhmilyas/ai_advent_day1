@@ -6,13 +6,6 @@ export interface ChatMessage {
   message: string;
 }
 
-export interface ChatResponse {
-  response: string;
-  conversation_id?: number;
-  model?: string;
-  error?: string;
-}
-
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -37,36 +30,6 @@ export type OnConversationCallback = (conversationId: number) => void;
 export type OnModelCallback = (model: string) => void;
 
 export class ChatService {
-  async sendMessage(message: string, conversationId?: number, systemPrompt?: string): Promise<ChatResponse> {
-    const payload: any = { message };
-    if (conversationId) {
-      payload.conversation_id = conversationId;
-    }
-    if (systemPrompt) {
-      payload.system_prompt = systemPrompt;
-    }
-
-    const response = await fetch(`${API_URL}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...AuthService.getAuthHeader(),
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to send message');
-    }
-
-    const data: ChatResponse = await response.json();
-    if (data.error) {
-      throw new Error(data.error);
-    }
-
-    return data;
-  }
-
   async streamMessage(
     message: string,
     onChunk: OnChunkCallback,

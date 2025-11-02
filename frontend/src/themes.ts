@@ -10,12 +10,10 @@ export interface ThemeColors {
 
   // Border colors
   border: string;
-  borderLight: string;
 
   // Component colors
   header: string;
   input: string;
-  placeholder: string;
 
   // Message colors
   userMessageBg: string;
@@ -47,11 +45,9 @@ export const lightTheme: ThemeColors = {
   textSecondary: '#666666',
 
   border: '#dddddd',
-  borderLight: '#eeeeee',
 
   header: '#ffffff',
   input: '#ffffff',
-  placeholder: '#999999',
 
   userMessageBg: '#007bff',
   userMessageText: '#ffffff',
@@ -79,11 +75,9 @@ export const darkTheme: ThemeColors = {
   textSecondary: '#b0b0b0',
 
   border: '#4a4a4a',
-  borderLight: '#3a3a3a',
 
   header: '#2d2d2d',
   input: '#3a3a3a',
-  placeholder: '#888888',
 
   userMessageBg: '#0056cc',
   userMessageText: '#ffffff',

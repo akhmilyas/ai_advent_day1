@@ -212,16 +212,3 @@ func DeleteConversation(convID int) error {
 	return nil
 }
 
-// ClearConversationHistory clears all messages from a conversation
-func ClearConversationHistory(convID int) error {
-	db := GetDB()
-
-	query := `DELETE FROM messages WHERE conversation_id = $1`
-	_, err := db.Exec(query, convID)
-	if err != nil {
-		return fmt.Errorf("error clearing conversation history: %w", err)
-	}
-
-	log.Printf("[DB] Cleared history for conversation: %d", convID)
-	return nil
-}
