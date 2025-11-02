@@ -11,6 +11,7 @@ services:
       - PORT=8080
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL}
+      - OPENROUTER_SYSTEM_PROMPT=${OPENROUTER_SYSTEM_PROMPT}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]

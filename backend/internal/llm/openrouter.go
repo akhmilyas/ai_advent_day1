@@ -51,6 +51,15 @@ func GetModel() string {
 	return model
 }
 
+func GetSystemPrompt() string {
+	systemPrompt := os.Getenv("OPENROUTER_SYSTEM_PROMPT")
+	if systemPrompt == "" {
+		// Default system prompt
+		systemPrompt = "You are a helpful assistant."
+	}
+	return systemPrompt
+}
+
 func StreamChat(prompt string, callback StreamCallback) error {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
@@ -58,14 +67,19 @@ func StreamChat(prompt string, callback StreamCallback) error {
 	}
 
 	model := GetModel()
+	systemPrompt := GetSystemPrompt()
 	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s", model)
+	log.Printf("[LLM] System prompt: %s", systemPrompt)
+
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: prompt},
+	}
 
 	reqBody := ChatRequest{
-		Model: model,
-		Messages: []Message{
-			{Role: "user", Content: prompt},
-		},
-		Stream: true,
+		Model:    model,
+		Messages: messages,
+		Stream:   true,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -142,14 +156,19 @@ func Chat(prompt string) (string, error) {
 	}
 
 	model := GetModel()
+	systemPrompt := GetSystemPrompt()
 	log.Printf("[LLM] Calling OpenRouter API with model: %s", model)
+	log.Printf("[LLM] System prompt: %s", systemPrompt)
+
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: prompt},
+	}
 
 	reqBody := ChatRequest{
-		Model: model,
-		Messages: []Message{
-			{Role: "user", Content: prompt},
-		},
-		Stream: false,
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
