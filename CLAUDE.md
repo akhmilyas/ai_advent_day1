@@ -164,11 +164,12 @@ Automatically seeded on backend startup:
 1. Add handler function to `backend/internal/handlers/chat.go`
 2. Register route in `backend/cmd/server/main.go` using Go 1.22+ method-based routing:
    ```go
-   mux.HandleFunc("GET /api/new/endpoint", enableCORS(auth.AuthMiddleware(chatHandler.Handler)))
+   mux.HandleFunc("POST /api/new/endpoint", enableCORS(auth.AuthMiddleware(chatHandler.Handler)))
+   mux.HandleFunc("OPTIONS /api/new/endpoint", corsHandler)  // ← CORS preflight
    ```
 3. Extract path parameters with `r.PathValue("param_name")` if needed
-4. Update ChatService in `frontend/src/services/chat.ts` to call the endpoint
-5. Update Chat component callbacks if needed
+4. Add corresponding method to ChatService in `frontend/src/services/chat.ts`
+5. Update Chat component callbacks or UI if needed
 
 ### Modifying LLM Behavior
 - Edit `backend/internal/llm/openrouter.go`:
@@ -258,6 +259,26 @@ mux.HandleFunc("DELETE /api/conversations/{id}", handler)
 ```
 
 Path parameters are extracted using `r.PathValue("id")`. This provides type-safe routing without third-party routers.
+
+## CORS Support
+
+Go 1.22+ method-based routing is method-specific, meaning routes like `"POST /api/login"` only match POST requests. However, browsers send preflight **OPTIONS requests** before actual cross-origin requests.
+
+The backend explicitly registers OPTIONS handlers for all endpoints:
+
+```go
+mux.HandleFunc("POST /api/login", enableCORS(handler))
+mux.HandleFunc("OPTIONS /api/login", corsHandler)  // ← Preflight response
+```
+
+This ensures:
+- Browser sends OPTIONS (preflight) → server responds with CORS headers
+- Browser then sends actual POST/GET/DELETE → request is allowed
+- Frontend can make API calls from http://localhost:3000 to http://localhost:8080
+
+**When adding new endpoints:**
+1. Register the method route: `mux.HandleFunc("POST /api/new", handler)`
+2. Register the OPTIONS route: `mux.HandleFunc("OPTIONS /api/new", corsHandler)`
 
 ## File Organization Reference
 

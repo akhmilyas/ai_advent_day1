@@ -56,6 +56,10 @@ OpenRouter LLM (External)
 - `POST /api/chat` → `{message, conversation_id?, system_prompt?}` → `{response, conversation_id, model}`
 - `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?}` → SSE stream
 - `GET /api/conversations` → `{conversations: [...]}`
+- `GET /api/conversations/{id}/messages` → `{messages: [...]}`
+- `DELETE /api/conversations/{id}` → `{success: boolean}`
+
+**CORS**: All endpoints support Cross-Origin requests from any origin (frontend can call backend from browser)
 
 ## Build & Run
 
