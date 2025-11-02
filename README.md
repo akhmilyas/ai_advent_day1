@@ -1,13 +1,12 @@
 # AI Chat Application
 
-A fullstack chat application with Go backend and React TypeScript frontend, featuring real-time streaming responses from OpenRouter's LLM APIs.
+A fullstack chat application with Go backend and React TypeScript frontend, featuring REST API integration with OpenRouter's LLM APIs and server-side conversation history management.
 
 ## Dependencies
 
 ### Backend
 - **Go**: 1.21 or higher
 - **Dependencies** (managed via go.mod):
-  - `github.com/coder/websocket` v1.8.12 - WebSocket implementation
   - `github.com/golang-jwt/jwt/v5` v5.2.0 - JWT authentication
 
 ### Frontend
@@ -32,12 +31,12 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 │  │  - Login Component (JWT Authentication)              │  │
 │  │  - Chat Component (Message UI)                       │  │
 │  │  - Auth Service (Token Management)                   │  │
-│  │  - Chat Service (HTTP REST & WebSocket)             │  │
+│  │  - Chat Service (HTTP REST)                          │  │
+│  │  - Theme System (Light/Dark modes)                   │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                           │
-                          │ HTTP REST (auth, non-streaming)
-                          │ WebSocket (streaming chat)
+                          │ HTTP REST API
                           │ JWT Bearer Token Authorization
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -49,7 +48,6 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 │  │  │  POST /api/login (public)                      │ │  │
 │  │  │  GET  /api/health (public)                     │ │  │
 │  │  │  POST /api/chat (protected, REST)              │ │  │
-│  │  │  WS   /api/chat/stream (protected, WebSocket)  │ │  │
 │  │  └────────────────────────────────────────────────┘ │  │
 │  │  ┌────────────────────────────────────────────────┐ │  │
 │  │  │  Middleware:                                    │ │  │
@@ -60,7 +58,8 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 │  │  │  Services:                                      │ │  │
 │  │  │  - Auth Service (JWT generation/validation)    │ │  │
 │  │  │  - LLM Service (OpenRouter integration)        │ │  │
-│  │  │  - Chat Handlers (REST & WebSocket)            │ │  │
+│  │  │  - Conversation Session Manager                │ │  │
+│  │  │  - Chat Handler (REST)                         │ │  │
 │  │  └────────────────────────────────────────────────┘ │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -75,7 +74,7 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 │  - System Prompt: Configurable via OPENROUTER_SYSTEM_PROMPT│
 │  - Default: "You are a helpful assistant."                  │
 │  - Endpoint: https://openrouter.ai/api/v1/chat/completions │
-│  - Streaming: Server-Sent Events (SSE)                      │
+│  - Conversation: Full history sent with each request        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -95,16 +94,16 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
    - All protected endpoints require `Authorization: Bearer <token>` header
 
 3. **Communication Patterns**:
-   - **HTTP REST**: Used for login and non-streaming chat
-   - **WebSocket**: Used for real-time streaming responses from LLM
+   - **HTTP REST**: All communication uses REST API for simplicity and compatibility
    - **CORS**: Enabled for cross-origin requests
+   - **JWT Authentication**: Bearer token authentication on protected endpoints
 
 4. **Chat Flow**:
-   - User sends message via WebSocket
-   - Backend maintains conversation history for the duration of the connection
-   - Backend forwards full conversation history to OpenRouter API with streaming enabled
-   - Response chunks streamed back to frontend via WebSocket
-   - Frontend displays chunks in real-time with typing animation
+   - User sends message via REST API
+   - Backend maintains server-side conversation history per user
+   - Backend forwards full conversation history to OpenRouter API
+   - Response returned in single API call
+   - Frontend updates UI with response and updated history
    - LLM has full context of previous messages in the conversation
 
 5. **Security**:
@@ -222,7 +221,6 @@ cd frontend
 
 # Create .env file (if not exists)
 echo "REACT_APP_API_URL=http://localhost:8080" > .env
-echo "REACT_APP_WS_URL=ws://localhost:8080" >> .env
 
 # Start development server
 npm start
@@ -232,15 +230,17 @@ Frontend will start on http://localhost:3000
 
 ## Conversation Context
 
-The application automatically maintains conversation history to provide better context to the LLM:
+The application automatically maintains server-side conversation history to provide better context to the LLM:
 
-- **WebSocket Endpoint**: Conversation history is maintained for the duration of the connection. Each message you send includes all previous messages in the conversation, allowing the LLM to understand the full context of your conversation.
-- **REST Endpoint**: You can optionally provide conversation history by sending an array of message objects instead of just a single message.
+- **REST Endpoint**: Each message automatically includes all previous messages in the conversation history
+- **Server-Side Storage**: Backend maintains conversation history per user (identified by username)
+- **Automatic Context**: Each new message is sent to OpenRouter with the full conversation context
 
 This enables:
 - Follow-up questions that reference previous answers
 - Multi-turn conversations with better context understanding
 - More coherent and relevant responses from the LLM
+- Conversation persistence (history maintained across messages within a session)
 
 ## Usage
 
@@ -252,8 +252,8 @@ This enables:
 2. **Chat**:
    - Type your message in the input field
    - Click "Send" or press Enter
-   - Watch the AI response stream in real-time
-   - The streaming indicator (blinking cursor) shows when AI is responding
+   - Wait for the AI response (typically 1-5 seconds)
+   - The response is displayed with full conversation history
    - Continue the conversation - the LLM will have context from previous messages!
 
 3. **Switch Theme**:
@@ -274,41 +274,31 @@ This enables:
 - `GET /api/health` - Health check
 
 ### Protected Endpoints (require JWT token)
-- `POST /api/chat` - Send message (non-streaming)
+- `POST /api/chat` - Send message with automatic conversation history
   ```json
   Headers: {"Authorization": "Bearer <token>"}
 
-  Single message (backward compatible):
   Request: {"message": "Hello"}
-  Response: {"response": "Hi there!"}
-
-  With conversation history:
-  Request: {
-    "messages": [
-      {"role": "user", "content": "What is Python?"},
-      {"role": "assistant", "content": "Python is a programming language..."},
-      {"role": "user", "content": "Tell me more about it"}
+  Response: {
+    "response": "Hi there! How can I help you?",
+    "history": [
+      {"role": "user", "content": "Hello"},
+      {"role": "assistant", "content": "Hi there! How can I help you?"}
     ]
   }
-  Response: {"response": "Python is..."}
+
+  Second message (LLM has context of first exchange):
+  Request: {"message": "Tell me a joke"}
+  Response: {
+    "response": "Why did the programmer quit his job? Because he didn't get arrays. 😄",
+    "history": [
+      {"role": "user", "content": "Hello"},
+      {"role": "assistant", "content": "Hi there! How can I help you?"},
+      {"role": "user", "content": "Tell me a joke"},
+      {"role": "assistant", "content": "Why did the programmer quit his job? Because he didn't get arrays. 😄"}
+    ]
+  }
   ```
-
-- `WS /api/chat/stream` - WebSocket for streaming chat
-  - Automatically maintains conversation history for the duration of the connection
-  - Each new message is added to the context for subsequent LLM calls
-  - Example:
-    ```json
-    Send: {"message": "Hello"}
-    Receive: {"type": "start", "content": ""}
-    Receive: {"type": "chunk", "content": "Hi"}
-    Receive: {"type": "chunk", "content": " there"}
-    Receive: {"type": "end", "content": ""}
-
-    Send: {"message": "Tell me a joke"}
-    Receive: {"type": "start", "content": ""}
-    Receive: {"type": "chunk", "content": "Why did..."}
-    (LLM now has context from previous "Hello" exchange)
-    ```
 
 ## Theme System
 
@@ -343,8 +333,10 @@ The application includes a built-in light and dark theme system:
 │   ├── internal/
 │   │   ├── auth/
 │   │   │   └── auth.go              # JWT authentication
+│   │   ├── conversation/
+│   │   │   └── conversation.go      # Session & conversation history management
 │   │   ├── handlers/
-│   │   │   └── chat.go              # HTTP & WebSocket handlers
+│   │   │   └── chat.go              # REST chat handler
 │   │   └── llm/
 │   │       └── openrouter.go        # OpenRouter API integration
 │   ├── go.mod                       # Go dependencies
@@ -361,7 +353,7 @@ The application includes a built-in light and dark theme system:
 │   │   │   └── ThemeContext.tsx      # Theme provider & hook
 │   │   ├── services/
 │   │   │   ├── auth.ts              # Auth service
-│   │   │   └── chat.ts              # Chat service with WS
+│   │   │   └── chat.ts              # Chat service (REST API)
 │   │   ├── App.tsx                  # Main app component
 │   │   ├── index.tsx                # Entry point
 │   │   ├── index.css                # Global styles
@@ -387,11 +379,12 @@ The application includes a built-in light and dark theme system:
 - **LLM behavior not as expected**: Check the `OPENROUTER_SYSTEM_PROMPT` environment variable. Customize it to change how the LLM responds (e.g., "You are a helpful coding assistant" or "Respond in French")
 
 ### Frontend Issues
-- **Can't connect to backend**: Update `REACT_APP_API_URL` and `REACT_APP_WS_URL` in `.env`
+- **Can't connect to backend**: Update `REACT_APP_API_URL` in `.env`
 - **CORS errors**: Make sure backend CORS is properly configured
-- **WebSocket connection fails**: Check firewall settings and ensure WebSocket upgrade is allowed
+- **API calls fail**: Check that the backend is running and accessible on the configured URL
 - **Theme not persisting**: Check browser localStorage is enabled. If you clear browser data, theme preference will be reset
 - **Theme toggle not working**: Make sure JavaScript is enabled in your browser
+- **Conversation history empty**: Logout and login again to start a fresh conversation session
 
 ### Docker Issues
 - **Port already in use**: Change ports in `docker-compose.yml`

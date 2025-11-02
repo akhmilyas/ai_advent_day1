@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ChatService, Message } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
@@ -14,48 +14,12 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Connect to WebSocket on mount
-    chatService.current.connectStream(
-      (chunk) => {
-        setStreamingContent((prev) => prev + chunk);
-      },
-      (error) => {
-        console.error('Stream error:', error);
-        setLoading(false);
-        setStreamingContent('');
-      },
-      (history) => {
-        // History received from backend - update messages
-        if (history && history.length > 0) {
-          setMessages(history.map((msg) => ({
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
-          })));
-        } else {
-          // Fallback: add streamed content as assistant message
-          setMessages((prev) => [
-            ...prev,
-            { role: 'assistant', content: streamingContent },
-          ]);
-        }
-        setStreamingContent('');
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      chatService.current.disconnectStream();
-    };
-  }, []);
-
-  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,22 +28,15 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     const userMessage = input.trim();
     setInput('');
     setLoading(true);
-    setStreamingContent('');
 
     try {
-      if (chatService.current.isConnected()) {
-        // Send only the message - server manages history
-        chatService.current.sendStreamMessage(userMessage);
-      } else {
-        // Fallback to REST API if WebSocket is not connected
-        const response = await chatService.current.sendMessage(userMessage);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'user', content: userMessage },
-          { role: 'assistant', content: response },
-        ]);
-        setLoading(false);
+      const response = await chatService.current.sendMessage(userMessage);
+
+      // Update messages with history from server
+      if (response.history && response.history.length > 0) {
+        setMessages(response.history);
       }
+      setLoading(false);
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages((prev) => [
@@ -91,7 +48,6 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   };
 
   const handleLogout = () => {
-    chatService.current.disconnectStream();
     AuthService.logout();
     onLogout();
   };
@@ -158,24 +114,6 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             <div style={styles.messageContent}>{msg.content}</div>
           </div>
         ))}
-
-        {streamingContent && (
-          <div
-            style={{
-              ...styles.message,
-              ...styles.assistantMessage,
-              backgroundColor: colors.assistantMessageBg,
-              borderColor: colors.assistantMessageBorder,
-              color: colors.assistantMessageText,
-            }}
-          >
-            <div style={{ ...styles.messageRole, opacity: 0.7 }}>AI</div>
-            <div style={styles.messageContent}>
-              {streamingContent}
-              <span style={styles.cursor}>▊</span>
-            </div>
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>
@@ -294,9 +232,6 @@ const styles = {
     fontSize: '16px',
     lineHeight: '1.5',
     whiteSpace: 'pre-wrap' as const,
-  },
-  cursor: {
-    animation: 'blink 1s infinite',
   },
   inputContainer: {
     display: 'flex',

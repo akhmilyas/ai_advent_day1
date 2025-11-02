@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
-
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 )
 
 type ChatRequest struct {
@@ -24,12 +20,6 @@ type ChatResponse struct {
 	History  []llm.Message `json:"history,omitempty"`
 }
 
-type WSMessage struct {
-	Type    string        `json:"type"` // "start", "chunk", "end", "error"
-	Content string        `json:"content"`
-	History []llm.Message `json:"history,omitempty"`
-}
-
 type ChatHandlers struct {
 	sessionManager *conversation.SessionManager
 }
@@ -40,7 +30,7 @@ func NewChatHandlers(sm *conversation.SessionManager) *ChatHandlers {
 	}
 }
 
-// ChatHandler is the REST endpoint for non-streaming chat
+// ChatHandler is the REST endpoint for chat
 func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -63,7 +53,17 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] User input: %s", req.Message)
 
-	response, err := llm.Chat(req.Message)
+	// Create a simple session ID based on username for per-user history
+	sessionID := username
+	session := ch.sessionManager.GetOrCreateSession(sessionID, username)
+
+	// Add user message to conversation history
+	session.AddUserMessage(req.Message)
+	currentHistory := session.GetMessages()
+	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
+
+	// Get response with full conversation history
+	response, err := llm.ChatWithHistory(currentHistory)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -76,107 +76,14 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] LLM response: %s", response)
 
+	// Add assistant response to conversation history
+	session.AddAssistantMessage(response)
+	updatedHistory := session.GetMessages()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
 		Response: response,
+		History:  updatedHistory,
 	})
 }
 
-// ChatStreamHandler is the WebSocket endpoint for streaming chat
-func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.Context().Value(auth.UserContextKey).(string)
-	log.Printf("WebSocket connection from user: %s", username)
-
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
-	})
-	if err != nil {
-		log.Printf("Failed to accept websocket: %v", err)
-		return
-	}
-	defer conn.Close(websocket.StatusInternalError, "")
-
-	ctx := r.Context()
-
-	// Generate unique session ID based on request
-	sessionID := strings.Join([]string{username, r.RemoteAddr}, "::")
-
-	// Get or create conversation session
-	session := ch.sessionManager.GetOrCreateSession(sessionID, username)
-	log.Printf("[STREAM] Using session %s", sessionID)
-
-	defer func() {
-		// Optionally delete session on disconnect (comment out to persist history)
-		// ch.sessionManager.DeleteSession(sessionID)
-	}()
-
-	for {
-		var req ChatRequest
-		err := wsjson.Read(ctx, conn, &req)
-		if err != nil {
-			log.Printf("Error reading message: %v", err)
-			break
-		}
-
-		if req.Message == "" {
-			continue
-		}
-
-		log.Printf("[STREAM] User input: %s", req.Message)
-
-		// Add user message to server-side conversation history
-		session.AddUserMessage(req.Message)
-		currentHistory := session.GetMessages()
-		log.Printf("[STREAM] Conversation history length: %d messages", len(currentHistory))
-
-		// Send start message
-		err = wsjson.Write(ctx, conn, WSMessage{
-			Type:    "start",
-			Content: "",
-		})
-		if err != nil {
-			log.Printf("Error sending start message: %v", err)
-			break
-		}
-
-		// Collect streamed response for logging
-		var fullResponse string
-
-		// Stream the response using server-side conversation history
-		streamErr := llm.StreamChatWithHistory(currentHistory, func(chunk string) error {
-			fullResponse += chunk
-			return wsjson.Write(ctx, conn, WSMessage{
-				Type:    "chunk",
-				Content: chunk,
-			})
-		})
-
-		if streamErr != nil {
-			log.Printf("[STREAM] Error streaming: %v", streamErr)
-			wsjson.Write(ctx, conn, WSMessage{
-				Type:    "error",
-				Content: streamErr.Error(),
-			})
-			continue
-		}
-
-		log.Printf("[STREAM] LLM response: %s", fullResponse)
-
-		// Add assistant response to server-side conversation history
-		session.AddAssistantMessage(fullResponse)
-		updatedHistory := session.GetMessages()
-
-		// Send end message with full conversation history
-		err = wsjson.Write(ctx, conn, WSMessage{
-			Type:    "end",
-			Content: "",
-			History: updatedHistory,
-		})
-		if err != nil {
-			log.Printf("Error sending end message: %v", err)
-			break
-		}
-	}
-
-	conn.Close(websocket.StatusNormalClosure, "")
-}
