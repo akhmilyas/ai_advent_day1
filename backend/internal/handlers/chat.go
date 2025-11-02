@@ -12,7 +12,8 @@ import (
 )
 
 type ChatRequest struct {
-	Message string `json:"message"`
+	Message  string          `json:"message,omitempty"`
+	Messages []llm.Message   `json:"messages,omitempty"`
 }
 
 type ChatResponse struct {
@@ -41,14 +42,24 @@ func ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Message == "" {
-		http.Error(w, "Message cannot be empty", http.StatusBadRequest)
+	// Support both single message and conversation history
+	var response string
+	var err error
+
+	if len(req.Messages) > 0 {
+		// Use conversation history if provided
+		log.Printf("[CHAT] User input with %d messages in history", len(req.Messages))
+		log.Printf("[CHAT] Last message: %s", req.Messages[len(req.Messages)-1].Content)
+		response, err = llm.ChatWithHistory(req.Messages)
+	} else if req.Message != "" {
+		// Fall back to single message mode for backward compatibility
+		log.Printf("[CHAT] User input: %s", req.Message)
+		response, err = llm.Chat(req.Message)
+	} else {
+		http.Error(w, "Message or messages array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("[CHAT] User input: %s", req.Message)
-
-	response, err := llm.Chat(req.Message)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -83,6 +94,9 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Maintain conversation history for this connection
+	var conversationHistory []llm.Message
+
 	for {
 		var req ChatRequest
 		err := wsjson.Read(ctx, conn, &req)
@@ -96,6 +110,13 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("[STREAM] User input: %s", req.Message)
+		log.Printf("[STREAM] Conversation history length: %d messages", len(conversationHistory))
+
+		// Add user message to conversation history
+		conversationHistory = append(conversationHistory, llm.Message{
+			Role:    "user",
+			Content: req.Message,
+		})
 
 		// Send start message
 		err = wsjson.Write(ctx, conn, WSMessage{
@@ -110,8 +131,8 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		// Collect streamed response for logging
 		var fullResponse string
 
-		// Stream the response
-		streamErr := llm.StreamChat(req.Message, func(chunk string) error {
+		// Stream the response using conversation history
+		streamErr := llm.StreamChatWithHistory(conversationHistory, func(chunk string) error {
 			fullResponse += chunk
 			return wsjson.Write(ctx, conn, WSMessage{
 				Type:    "chunk",
@@ -129,6 +150,12 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("[STREAM] LLM response: %s", fullResponse)
+
+		// Add assistant response to conversation history
+		conversationHistory = append(conversationHistory, llm.Message{
+			Role:    "assistant",
+			Content: fullResponse,
+		})
 
 		// Send end message
 		err = wsjson.Write(ctx, conn, WSMessage{

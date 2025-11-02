@@ -81,24 +81,33 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 
 ### Key Features
 
-1. **Authentication Flow**:
+1. **Theme Support**:
+   - Light and Dark themes
+   - Theme toggle button in the Chat interface (🌙/☀️)
+   - Theme preference automatically saved to browser localStorage
+   - Smooth transitions between themes
+   - System preference detection (respects OS dark mode setting)
+
+2. **Authentication Flow**:
    - User logs in with credentials (default: `demo`/`demo123`)
    - Backend generates JWT token valid for 24 hours
    - Token stored in localStorage
    - All protected endpoints require `Authorization: Bearer <token>` header
 
-2. **Communication Patterns**:
+3. **Communication Patterns**:
    - **HTTP REST**: Used for login and non-streaming chat
    - **WebSocket**: Used for real-time streaming responses from LLM
    - **CORS**: Enabled for cross-origin requests
 
-3. **Chat Flow**:
+4. **Chat Flow**:
    - User sends message via WebSocket
-   - Backend forwards to OpenRouter API with streaming enabled
+   - Backend maintains conversation history for the duration of the connection
+   - Backend forwards full conversation history to OpenRouter API with streaming enabled
    - Response chunks streamed back to frontend via WebSocket
    - Frontend displays chunks in real-time with typing animation
+   - LLM has full context of previous messages in the conversation
 
-4. **Security**:
+5. **Security**:
    - JWT-based authentication
    - Token validation on protected routes
    - API key stored securely in environment variables
@@ -221,6 +230,18 @@ npm start
 
 Frontend will start on http://localhost:3000
 
+## Conversation Context
+
+The application automatically maintains conversation history to provide better context to the LLM:
+
+- **WebSocket Endpoint**: Conversation history is maintained for the duration of the connection. Each message you send includes all previous messages in the conversation, allowing the LLM to understand the full context of your conversation.
+- **REST Endpoint**: You can optionally provide conversation history by sending an array of message objects instead of just a single message.
+
+This enables:
+- Follow-up questions that reference previous answers
+- Multi-turn conversations with better context understanding
+- More coherent and relevant responses from the LLM
+
 ## Usage
 
 1. **Login**:
@@ -233,8 +254,13 @@ Frontend will start on http://localhost:3000
    - Click "Send" or press Enter
    - Watch the AI response stream in real-time
    - The streaming indicator (blinking cursor) shows when AI is responding
+   - Continue the conversation - the LLM will have context from previous messages!
 
-3. **Logout**:
+3. **Switch Theme**:
+   - Click the moon (🌙) or sun (☀️) button in the header to toggle between light and dark themes
+   - Your theme preference is automatically saved and will persist across sessions
+
+4. **Logout**:
    - Click the "Logout" button in the top-right corner
 
 ## API Endpoints
@@ -251,17 +277,60 @@ Frontend will start on http://localhost:3000
 - `POST /api/chat` - Send message (non-streaming)
   ```json
   Headers: {"Authorization": "Bearer <token>"}
+
+  Single message (backward compatible):
   Request: {"message": "Hello"}
   Response: {"response": "Hi there!"}
+
+  With conversation history:
+  Request: {
+    "messages": [
+      {"role": "user", "content": "What is Python?"},
+      {"role": "assistant", "content": "Python is a programming language..."},
+      {"role": "user", "content": "Tell me more about it"}
+    ]
+  }
+  Response: {"response": "Python is..."}
   ```
+
 - `WS /api/chat/stream` - WebSocket for streaming chat
-  ```json
-  Send: {"message": "Hello"}
-  Receive: {"type": "start", "content": ""}
-  Receive: {"type": "chunk", "content": "Hi"}
-  Receive: {"type": "chunk", "content": " there"}
-  Receive: {"type": "end", "content": ""}
-  ```
+  - Automatically maintains conversation history for the duration of the connection
+  - Each new message is added to the context for subsequent LLM calls
+  - Example:
+    ```json
+    Send: {"message": "Hello"}
+    Receive: {"type": "start", "content": ""}
+    Receive: {"type": "chunk", "content": "Hi"}
+    Receive: {"type": "chunk", "content": " there"}
+    Receive: {"type": "end", "content": ""}
+
+    Send: {"message": "Tell me a joke"}
+    Receive: {"type": "start", "content": ""}
+    Receive: {"type": "chunk", "content": "Why did..."}
+    (LLM now has context from previous "Hello" exchange)
+    ```
+
+## Theme System
+
+The application includes a built-in light and dark theme system:
+
+### Light Theme
+- Light gray background with white surfaces
+- Dark text for good readability
+- Blue primary buttons and user message background
+
+### Dark Theme
+- Dark background with slightly lighter surfaces
+- Light text for comfortable viewing in low light
+- Blue primary buttons (adjusted for dark background)
+- Dark message backgrounds with light text
+
+### Implementation
+- **Context API**: Theme state managed via React Context (`ThemeContext.tsx`)
+- **Themes Configuration**: Centralized color definitions in `themes.ts`
+- **Persistence**: Theme preference saved to browser localStorage
+- **System Detection**: Automatically detects OS-level dark mode preference
+- **Smooth Transitions**: CSS transitions for theme changes (0.3s ease)
 
 ## Project Structure
 
@@ -288,12 +357,15 @@ Frontend will start on http://localhost:3000
 │   │   ├── components/
 │   │   │   ├── Login.tsx            # Login component
 │   │   │   └── Chat.tsx             # Chat component
+│   │   ├── contexts/
+│   │   │   └── ThemeContext.tsx      # Theme provider & hook
 │   │   ├── services/
 │   │   │   ├── auth.ts              # Auth service
 │   │   │   └── chat.ts              # Chat service with WS
 │   │   ├── App.tsx                  # Main app component
 │   │   ├── index.tsx                # Entry point
-│   │   └── index.css                # Global styles
+│   │   ├── index.css                # Global styles
+│   │   └── themes.ts                # Theme color definitions
 │   ├── package.json                 # Node dependencies
 │   ├── tsconfig.json                # TypeScript config
 │   ├── nginx.conf                   # Nginx config for Docker
@@ -318,6 +390,8 @@ Frontend will start on http://localhost:3000
 - **Can't connect to backend**: Update `REACT_APP_API_URL` and `REACT_APP_WS_URL` in `.env`
 - **CORS errors**: Make sure backend CORS is properly configured
 - **WebSocket connection fails**: Check firewall settings and ensure WebSocket upgrade is allowed
+- **Theme not persisting**: Check browser localStorage is enabled. If you clear browser data, theme preference will be reset
+- **Theme toggle not working**: Make sure JavaScript is enabled in your browser
 
 ### Docker Issues
 - **Port already in use**: Change ports in `docker-compose.yml`
