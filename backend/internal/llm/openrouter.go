@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 )
 
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
@@ -178,4 +180,93 @@ func ChatWithHistory(messages []Message) (string, error) {
 	}
 
 	return chatResp.Choices[0].Message.Content, nil
+}
+
+// ChatWithHistoryStream sends a chat request with conversation history and streams the response
+func ChatWithHistoryStream(messages []Message) (<-chan string, error) {
+	apiKey := GetAPIKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
+	}
+
+	model := GetModel()
+	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, message history count: %d", model, len(messages))
+
+	messagesWithHistory := buildMessagesWithHistory(messages)
+
+	reqBody := ChatRequest{
+		Model:    model,
+		Messages: messagesWithHistory,
+		Stream:   true,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", openRouterURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "http://localhost:3000")
+	req.Header.Set("X-Title", "Chat App")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Create channel to stream chunks
+	chunks := make(chan string)
+
+	// Start reading stream in a goroutine
+	go func() {
+		defer resp.Body.Close()
+		defer close(chunks)
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Skip empty lines and [DONE] markers
+			if line == "" || line == "data: [DONE]" {
+				continue
+			}
+
+			// Parse SSE event format: "data: {json}"
+			if strings.HasPrefix(line, "data: ") {
+				jsonStr := strings.TrimPrefix(line, "data: ")
+
+				var streamResp ChatResponse
+				if err := json.Unmarshal([]byte(jsonStr), &streamResp); err != nil {
+					log.Printf("[LLM] Error parsing stream chunk: %v", err)
+					continue
+				}
+
+				// Extract content from delta field (streaming responses use delta)
+				if len(streamResp.Choices) > 0 && streamResp.Choices[0].Delta.Content != "" {
+					chunk := streamResp.Choices[0].Delta.Content
+					chunks <- chunk
+					log.Printf("[LLM] Stream chunk: %q", chunk)
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			log.Printf("[LLM] Scanner error: %v", err)
+		}
+	}()
+
+	return chunks, nil
 }

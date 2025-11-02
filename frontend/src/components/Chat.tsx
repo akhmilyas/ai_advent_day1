@@ -32,21 +32,37 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     // Optimistically add user message to UI
     setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
 
-    try {
-      const response = await chatService.current.sendMessage(userMessage);
+    // Add empty assistant message that will be filled in via streaming
+    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
-      // Add only the LLM response from backend
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: response.response },
-      ]);
+    try {
+      // Stream the response and update the assistant message
+      await chatService.current.streamMessage(userMessage, (chunk) => {
+        // Update the last message (assistant) with the new chunk
+        setMessages((prev) => {
+          const updated = [...prev];
+          if (updated[updated.length - 1].role === 'assistant') {
+            updated[updated.length - 1] = {
+              ...updated[updated.length - 1],
+              content: updated[updated.length - 1].content + chunk,
+            };
+          }
+          return updated;
+        });
+      });
       setLoading(false);
     } catch (error) {
       console.error('Error sending message:', error);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Error: Failed to get response' },
-      ]);
+      setMessages((prev) => {
+        const updated = [...prev];
+        if (updated[updated.length - 1].role === 'assistant') {
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            content: 'Error: Failed to get response',
+          };
+        }
+        return updated;
+      });
       setLoading(false);
     }
   };

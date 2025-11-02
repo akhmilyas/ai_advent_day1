@@ -94,18 +94,21 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
    - All protected endpoints require `Authorization: Bearer <token>` header
 
 3. **Communication Patterns**:
-   - **HTTP REST**: All communication uses REST API for simplicity and compatibility
+   - **HTTP REST**: Standard REST API for non-streaming requests
+   - **Server-Sent Events (SSE)**: Real-time streaming of LLM responses using SSE for responsive UX
    - **CORS**: Enabled for cross-origin requests
    - **JWT Authentication**: Bearer token authentication on protected endpoints
 
 4. **Chat Flow**:
    - User types message and clicks Send
    - Frontend **immediately displays user message** (optimistic UI update)
-   - Backend receives message via REST API
+   - Backend receives message via SSE streaming endpoint
    - Backend maintains server-side conversation history per user
-   - Backend forwards full conversation history to OpenRouter API
-   - LLM response returned in single API call
-   - Frontend receives response and displays LLM answer
+   - Backend forwards full conversation history to OpenRouter API with `stream: true`
+   - LLM starts streaming response chunks via SSE
+   - Frontend receives chunks in real-time and builds response character-by-character
+   - User sees the LLM response appearing progressively (streaming effect)
+   - Once streaming completes, backend adds full response to conversation history
    - LLM has full context of previous messages in the conversation
 
 5. **Security**:
@@ -254,13 +257,16 @@ This enables:
 - Responsive UI despite API latency (thanks to optimistic updates)
 - Conversation persistence within a session
 
-### Why No Streaming?
-The application uses REST-only synchronous responses instead of streaming for:
-- **Simplicity**: No WebSocket setup or state management complexity
-- **Compatibility**: Works with any HTTP client and proxy
-- **Reliability**: No stream parsing or connection handling issues
-- **Frontend UX**: Optimistic updates provide instant feedback (no need for chunk-by-chunk rendering)
-- **Backend**: Cleaner, more straightforward code without streaming callbacks
+### Server-Sent Events (SSE) Streaming
+The application uses **SSE (Server-Sent Events)** for streaming LLM responses instead of WebSockets because:
+- **Simplicity**: SSE is built on standard HTTP, no additional protocol complexity
+- **Compatibility**: Works through HTTP proxies and firewalls without special configuration
+- **Unidirectional**: Perfect fit for server-to-client streaming (client sends message, server streams response)
+- **Automatic Reconnection**: Browser handles reconnection logic automatically on disconnect
+- **Standards-based**: W3C standard part of HTML5 Streams API
+- **Efficiency**: Lower overhead than WebSockets for one-way communication
+- **Progressive Response**: Users see LLM response appearing character-by-character as it's generated
+- **Responsive UI**: Combined with optimistic message updates for instant feedback
 
 ## Usage
 
@@ -273,9 +279,10 @@ The application uses REST-only synchronous responses instead of streaming for:
    - Type your message in the input field
    - Click "Send" or press Enter
    - Your message appears **instantly** in the chat (optimistic update)
-   - Wait for the AI response (typically 1-5 seconds)
-   - The response is displayed below your message
-   - Continue the conversation - the LLM will have full context from previous messages!
+   - AI response starts streaming immediately - you'll see it appearing character-by-character
+   - The response builds progressively as the LLM generates tokens
+   - Once complete, you can continue the conversation
+   - The LLM has full context from previous messages in the conversation!
 
 3. **Switch Theme**:
    - Click the moon (🌙) or sun (☀️) button in the header to toggle between light and dark themes
@@ -295,7 +302,8 @@ The application uses REST-only synchronous responses instead of streaming for:
 - `GET /api/health` - Health check
 
 ### Protected Endpoints (require JWT token)
-- `POST /api/chat` - Send message with automatic conversation history
+
+- `POST /api/chat` - Send message with automatic conversation history (non-streaming)
   ```json
   Headers: {"Authorization": "Bearer <token>"}
 
@@ -304,17 +312,37 @@ The application uses REST-only synchronous responses instead of streaming for:
     "response": "Hi there! How can I help you?"
   }
 
-  Second message (LLM has full context of previous exchange):
-  Request: {"message": "Tell me a joke"}
-  Response: {
-    "response": "Why did the programmer quit his job? Because he didn't get arrays. 😄"
-  }
-
   Notes:
+  - Returns complete response in a single API call
   - Backend automatically maintains conversation history server-side (per user)
   - Backend sends full conversation history to OpenRouter with each request
-  - Frontend handles message display with optimistic UI updates
-  - No need to send history in requests - backend manages it automatically
+  ```
+
+- `POST /api/chat/stream` - Send message with streaming SSE response
+  ```
+  Headers: {"Authorization": "Bearer <token>"}
+  Content-Type: text/event-stream
+
+  Request: {"message": "Hello"}
+  Response: Server-Sent Events stream of chunks
+    data: Hi
+    data:  there
+    data: !
+    data:  How
+    data:  can
+    data:  I
+    data:  help
+    data:  you
+    data: ?
+    data: [DONE]
+
+  Notes:
+  - Streams response chunks in real-time using SSE format
+  - Browser automatically parses SSE events and updates UI progressively
+  - Backend maintains full conversation history per user
+  - Each chunk arrives as it's generated by the LLM
+  - [DONE] marker signals end of stream
+  - Perfect for responsive UI that shows progressive responses
   ```
 
 ## Theme System
@@ -353,9 +381,9 @@ The application includes a built-in light and dark theme system:
 │   │   ├── conversation/
 │   │   │   └── conversation.go      # Session & conversation history management
 │   │   ├── handlers/
-│   │   │   └── chat.go              # REST chat handler
+│   │   │   └── chat.go              # Chat handlers (REST + SSE streaming)
 │   │   └── llm/
-│   │       └── openrouter.go        # OpenRouter API integration
+│   │       └── openrouter.go        # OpenRouter API integration (REST + SSE streaming)
 │   ├── go.mod                       # Go dependencies
 │   ├── Dockerfile                   # Backend container
 │   └── .gitignore
@@ -370,7 +398,7 @@ The application includes a built-in light and dark theme system:
 │   │   │   └── ThemeContext.tsx      # Theme provider & hook
 │   │   ├── services/
 │   │   │   ├── auth.ts              # Auth service
-│   │   │   └── chat.ts              # Chat service (REST API)
+│   │   │   └── chat.ts              # Chat service (REST + SSE streaming)
 │   │   ├── App.tsx                  # Main app component
 │   │   ├── index.tsx                # Entry point
 │   │   ├── index.css                # Global styles
@@ -392,14 +420,18 @@ The application includes a built-in light and dark theme system:
 - **"OPENROUTER_API_KEY not configured"**: Make sure you set the environment variable
 - **"Connection refused"**: Check if backend is running on port 8080
 - **"Invalid token"**: Login again to get a new JWT token
-- **Slow response time**: The LLM API response can take 1-5 seconds. This is normal. Your message appears instantly due to optimistic UI updates, so you can keep typing while waiting.
+- **Stream not connecting**: Make sure browser supports SSE (all modern browsers do). Check browser console for CORS errors
+- **Incomplete streaming response**: The backend may have encountered an error. Check backend logs with `docker-compose logs backend`
+- **Slow response time**: The LLM API response can take 1-5 seconds. This is normal and expected. Your message appears instantly due to optimistic UI updates, and response streams as it's generated
 - **Model not working**: Check that `OPENROUTER_MODEL` is set to a valid model ID from OpenRouter. If not set, it defaults to `meta-llama/llama-3.3-8b-instruct:free`
 - **LLM behavior not as expected**: Check the `OPENROUTER_SYSTEM_PROMPT` environment variable. Customize it to change how the LLM responds (e.g., "You are a helpful coding assistant" or "Respond in French")
 
 ### Frontend Issues
 - **Can't connect to backend**: Update `REACT_APP_API_URL` in `.env`
-- **CORS errors**: Make sure backend CORS is properly configured
+- **CORS errors**: Make sure backend CORS is properly configured. SSE requires CORS headers
 - **API calls fail**: Check that the backend is running and accessible on the configured URL
+- **Stream stops before completion**: Check browser network tab - look for stream connection issues. Ensure network connection is stable
+- **Response not appearing**: Check browser console for JavaScript errors. Clear browser cache and reload
 - **Theme not persisting**: Check browser localStorage is enabled. If you clear browser data, theme preference will be reset
 - **Theme toggle not working**: Make sure JavaScript is enabled in your browser
 - **Conversation history empty**: Logout and login again to start a fresh conversation session
