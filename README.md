@@ -99,11 +99,13 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
    - **JWT Authentication**: Bearer token authentication on protected endpoints
 
 4. **Chat Flow**:
-   - User sends message via REST API
+   - User types message and clicks Send
+   - Frontend **immediately displays user message** (optimistic UI update)
+   - Backend receives message via REST API
    - Backend maintains server-side conversation history per user
    - Backend forwards full conversation history to OpenRouter API
-   - Response returned in single API call
-   - Frontend updates UI with response and updated history
+   - LLM response returned in single API call
+   - Frontend receives response and displays LLM answer
    - LLM has full context of previous messages in the conversation
 
 5. **Security**:
@@ -228,19 +230,37 @@ npm start
 
 Frontend will start on http://localhost:3000
 
-## Conversation Context
+## Conversation Context & Optimistic UI Updates
 
-The application automatically maintains server-side conversation history to provide better context to the LLM:
+The application uses two key techniques for better UX and LLM context:
 
-- **REST Endpoint**: Each message automatically includes all previous messages in the conversation history
-- **Server-Side Storage**: Backend maintains conversation history per user (identified by username)
-- **Automatic Context**: Each new message is sent to OpenRouter with the full conversation context
+### Optimistic UI Updates
+- User message appears **instantly** when sent (no waiting for server response)
+- Provides immediate visual feedback to the user
+- Frontend displays message immediately while backend processes it
+- Users can continue typing without waiting for the LLM response
+- Much more responsive than waiting for full API response
+
+### Server-Side Conversation History
+- Backend automatically maintains conversation history per user
+- Each message is stored on the server (identified by username)
+- Each new message is sent to OpenRouter with **full conversation context**
+- LLM has complete context of the entire conversation
 
 This enables:
 - Follow-up questions that reference previous answers
 - Multi-turn conversations with better context understanding
 - More coherent and relevant responses from the LLM
-- Conversation persistence (history maintained across messages within a session)
+- Responsive UI despite API latency (thanks to optimistic updates)
+- Conversation persistence within a session
+
+### Why No Streaming?
+The application uses REST-only synchronous responses instead of streaming for:
+- **Simplicity**: No WebSocket setup or state management complexity
+- **Compatibility**: Works with any HTTP client and proxy
+- **Reliability**: No stream parsing or connection handling issues
+- **Frontend UX**: Optimistic updates provide instant feedback (no need for chunk-by-chunk rendering)
+- **Backend**: Cleaner, more straightforward code without streaming callbacks
 
 ## Usage
 
@@ -252,9 +272,10 @@ This enables:
 2. **Chat**:
    - Type your message in the input field
    - Click "Send" or press Enter
+   - Your message appears **instantly** in the chat (optimistic update)
    - Wait for the AI response (typically 1-5 seconds)
-   - The response is displayed with full conversation history
-   - Continue the conversation - the LLM will have context from previous messages!
+   - The response is displayed below your message
+   - Continue the conversation - the LLM will have full context from previous messages!
 
 3. **Switch Theme**:
    - Click the moon (🌙) or sun (☀️) button in the header to toggle between light and dark themes
@@ -280,24 +301,20 @@ This enables:
 
   Request: {"message": "Hello"}
   Response: {
-    "response": "Hi there! How can I help you?",
-    "history": [
-      {"role": "user", "content": "Hello"},
-      {"role": "assistant", "content": "Hi there! How can I help you?"}
-    ]
+    "response": "Hi there! How can I help you?"
   }
 
-  Second message (LLM has context of first exchange):
+  Second message (LLM has full context of previous exchange):
   Request: {"message": "Tell me a joke"}
   Response: {
-    "response": "Why did the programmer quit his job? Because he didn't get arrays. 😄",
-    "history": [
-      {"role": "user", "content": "Hello"},
-      {"role": "assistant", "content": "Hi there! How can I help you?"},
-      {"role": "user", "content": "Tell me a joke"},
-      {"role": "assistant", "content": "Why did the programmer quit his job? Because he didn't get arrays. 😄"}
-    ]
+    "response": "Why did the programmer quit his job? Because he didn't get arrays. 😄"
   }
+
+  Notes:
+  - Backend automatically maintains conversation history server-side (per user)
+  - Backend sends full conversation history to OpenRouter with each request
+  - Frontend handles message display with optimistic UI updates
+  - No need to send history in requests - backend manages it automatically
   ```
 
 ## Theme System
@@ -375,6 +392,7 @@ The application includes a built-in light and dark theme system:
 - **"OPENROUTER_API_KEY not configured"**: Make sure you set the environment variable
 - **"Connection refused"**: Check if backend is running on port 8080
 - **"Invalid token"**: Login again to get a new JWT token
+- **Slow response time**: The LLM API response can take 1-5 seconds. This is normal. Your message appears instantly due to optimistic UI updates, so you can keep typing while waiting.
 - **Model not working**: Check that `OPENROUTER_MODEL` is set to a valid model ID from OpenRouter. If not set, it defaults to `meta-llama/llama-3.3-8b-instruct:free`
 - **LLM behavior not as expected**: Check the `OPENROUTER_SYSTEM_PROMPT` environment variable. Customize it to change how the LLM responds (e.g., "You are a helpful coding assistant" or "Respond in French")
 
