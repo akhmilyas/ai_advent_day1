@@ -9,6 +9,7 @@ export interface ChatMessage {
 export interface ChatResponse {
   response: string;
   conversation_id?: number;
+  model?: string;
   error?: string;
 }
 
@@ -19,6 +20,7 @@ export interface Message {
 
 export type OnChunkCallback = (chunk: string) => void;
 export type OnConversationCallback = (conversationId: number) => void;
+export type OnModelCallback = (model: string) => void;
 
 export class ChatService {
   async sendMessage(message: string, conversationId?: number): Promise<ChatResponse> {
@@ -52,7 +54,8 @@ export class ChatService {
     message: string,
     onChunk: OnChunkCallback,
     onConversation?: OnConversationCallback,
-    conversationId?: number
+    conversationId?: number,
+    onModel?: OnModelCallback
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -97,6 +100,13 @@ export class ChatService {
               const convId = parseInt(content.slice(8), 10);
               if (!isNaN(convId) && onConversation) {
                 onConversation(convId);
+              }
+            }
+            // Check for model metadata
+            else if (content.startsWith('MODEL:')) {
+              const model = content.slice(6);
+              if (model && onModel) {
+                onModel(model);
               }
             }
             // Skip [DONE] and empty events

@@ -17,6 +17,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
+  const [model, setModel] = useState<string>('');
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -59,7 +60,11 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           // Set conversation ID when received from server
           setConversationId(convId);
         },
-        conversationId
+        conversationId,
+        (modelName) => {
+          // Set model when received from server
+          setModel(modelName);
+        }
       );
       setLoading(false);
     } catch (error) {
@@ -86,7 +91,10 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   return (
     <div style={{ ...styles.container, backgroundColor: colors.background }}>
       <div style={{ ...styles.header, backgroundColor: colors.header, borderBottomColor: colors.border }}>
-        <h2 style={{ ...styles.title, color: colors.text }}>AI Chat</h2>
+        <div>
+          <h2 style={{ ...styles.title, color: colors.text }}>AI Chat</h2>
+          {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+        </div>
         <div style={styles.buttonGroup}>
           <button
             onClick={toggleTheme}
@@ -232,6 +240,12 @@ const styles = {
   },
   title: {
     margin: 0,
+    transition: 'color 0.3s ease',
+  },
+  modelLabel: {
+    margin: '4px 0 0 0',
+    fontSize: '12px',
+    opacity: 0.7,
     transition: 'color 0.3s ease',
   },
   buttonGroup: {

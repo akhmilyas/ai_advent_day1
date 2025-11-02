@@ -20,6 +20,7 @@ type ChatRequest struct {
 type ChatResponse struct {
 	Response       string `json:"response"`
 	ConversationID int    `json:"conversation_id,omitempty"`
+	Model          string `json:"model,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
@@ -141,6 +142,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ChatResponse{
 		Response:       response,
 		ConversationID: conversation.ID,
+		Model:          llm.GetModel(),
 	})
 }
 
@@ -244,6 +246,12 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	fmt.Fprintf(w, "data: CONV_ID:%d\n\n", conversation.ID)
 	flusher.Flush()
 	log.Printf("[CHAT] Sent conversation ID: %d", conversation.ID)
+
+	// Send model as second event
+	model := llm.GetModel()
+	fmt.Fprintf(w, "data: MODEL:%s\n\n", model)
+	flusher.Flush()
+	log.Printf("[CHAT] Sent model: %s", model)
 
 	// Buffer to accumulate the full response
 	var fullResponse string
