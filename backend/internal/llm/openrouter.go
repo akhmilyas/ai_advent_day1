@@ -58,8 +58,12 @@ func GetSystemPrompt() string {
 	return systemPrompt
 }
 
-func buildMessagesWithHistory(messages []Message) []Message {
+func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
 	systemPrompt := GetSystemPrompt()
+	// If custom prompt is provided, append it to the default system prompt
+	if customPrompt != "" {
+		systemPrompt = systemPrompt + "\n\nAdditional instructions: " + customPrompt
+	}
 	// Prepend system message to the conversation history
 	return append([]Message{{Role: "system", Content: systemPrompt}}, messages...)
 }
@@ -126,7 +130,7 @@ func Chat(prompt string) (string, error) {
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message) (string, error) {
+func ChatWithHistory(messages []Message, customSystemPrompt string) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -135,7 +139,7 @@ func ChatWithHistory(messages []Message) (string, error) {
 	model := GetModel()
 	log.Printf("[LLM] Calling OpenRouter API with model: %s, message history count: %d", model, len(messages))
 
-	messagesWithHistory := buildMessagesWithHistory(messages)
+	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
 		Model:    model,
@@ -183,7 +187,7 @@ func ChatWithHistory(messages []Message) (string, error) {
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string) (<-chan string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -192,7 +196,7 @@ func ChatWithHistoryStream(messages []Message) (<-chan string, error) {
 	model := GetModel()
 	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, message history count: %d", model, len(messages))
 
-	messagesWithHistory := buildMessagesWithHistory(messages)
+	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
 		Model:    model,

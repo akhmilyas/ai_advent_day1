@@ -2,7 +2,7 @@
 
 A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter LLM API integration.
 
-**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering
+**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts
 
 ## Quick Start
 
@@ -53,8 +53,8 @@ OpenRouter LLM (External)
 - `GET /api/health` → OK
 
 ### Protected (require `Authorization: Bearer <token>`)
-- `POST /api/chat` → `{message}` → `{response}`
-- `POST /api/chat/stream` → `{message}` → SSE stream
+- `POST /api/chat` → `{message, conversation_id?, system_prompt?}` → `{response, conversation_id, model}`
+- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?}` → SSE stream
 - `GET /api/conversations` → `{conversations: [...]}`
 
 ## Build & Run
@@ -108,9 +108,10 @@ DB_SSLMODE=disable
 
 1. **Register/Login**: Create account or use `demo/demo123`
 2. **Chat**: Type message → AI streams response in real-time
-3. **Theme**: Toggle 🌙/☀️ button for dark/light mode
-4. **Conversations**: Auto-created and persisted in database
-5. **Logout**: Click logout button (conversations saved)
+3. **System Prompt**: Click ⚙️ Settings button to customize AI behavior (saved locally)
+4. **Theme**: Toggle 🌙/☀️ button for dark/light mode
+5. **Conversations**: Auto-created and persisted in database
+6. **Logout**: Click logout button (conversations saved)
 
 ## Tech Stack
 
@@ -122,6 +123,7 @@ DB_SSLMODE=disable
 
 - **Auth**: JWT tokens (24hr), bcrypt password hashing, user registration
 - **Chat**: SSE streaming, optimistic UI updates, full conversation history
+- **System Prompts**: Global session-wide custom prompts merged with env default, localStorage persistence
 - **Markdown**: Tables, lists, headers, code blocks with syntax highlighting
 - **Database**: PostgreSQL persistence for users/conversations/messages
 - **Security**: JWT validation, CORS, API key management
@@ -152,7 +154,7 @@ docker-compose.yml
 | Database connection error | Check DB_HOST, DB_PORT, credentials in `.env` |
 | Login fails | Use demo/demo123 or register new account |
 | Stream stops | Check network connection, browser console for errors |
-| Theme not saving | Enable localStorage in browser |
+| Settings/theme/prompt not saving | Enable localStorage in browser |
 | CORS errors | Verify backend is running and accessible |
 
 ## License

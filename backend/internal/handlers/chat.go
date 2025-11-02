@@ -12,9 +12,10 @@ import (
 )
 
 type ChatRequest struct {
-	Message         string      `json:"message,omitempty"`
+	Message         string        `json:"message,omitempty"`
 	Messages        []llm.Message `json:"messages,omitempty"`
-	ConversationID  int         `json:"conversation_id,omitempty"`
+	ConversationID  int           `json:"conversation_id,omitempty"`
+	SystemPrompt    string        `json:"system_prompt,omitempty"`
 }
 
 type ChatResponse struct {
@@ -118,7 +119,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Get response with full conversation history
-	response, err := llm.ChatWithHistory(currentHistory)
+	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -235,7 +236,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory)
+	chunks, err := llm.ChatWithHistoryStream(currentHistory, req.SystemPrompt)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())

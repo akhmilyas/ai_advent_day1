@@ -5,6 +5,7 @@ import { ChatService, Message } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
+import { SettingsModal } from './SettingsModal';
 
 interface ChatProps {
   onLogout: () => void;
@@ -18,12 +19,27 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const [model, setModel] = useState<string>('');
+  const [systemPrompt, setSystemPrompt] = useState<string>('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load system prompt from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('systemPrompt');
+    if (saved) {
+      setSystemPrompt(saved);
+    }
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const handleSystemPromptChange = (prompt: string) => {
+    setSystemPrompt(prompt);
+    localStorage.setItem('systemPrompt', prompt);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,7 +80,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         (modelName) => {
           // Set model when received from server
           setModel(modelName);
-        }
+        },
+        systemPrompt
       );
       setLoading(false);
     } catch (error) {
@@ -107,6 +124,18 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
           >
             {theme === 'light' ? '🌙' : '☀️'}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            style={{
+              ...styles.themeButton,
+              backgroundColor: colors.surface,
+              color: colors.text,
+              border: `1px solid ${colors.border}`,
+            }}
+            title="Settings"
+          >
+            ⚙️
           </button>
           <button
             onClick={handleLogout}
@@ -219,6 +248,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           Send
         </button>
       </form>
+
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        systemPrompt={systemPrompt}
+        onSystemPromptChange={handleSystemPromptChange}
+      />
     </div>
   );
 };

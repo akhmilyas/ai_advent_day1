@@ -23,10 +23,13 @@ export type OnConversationCallback = (conversationId: number) => void;
 export type OnModelCallback = (model: string) => void;
 
 export class ChatService {
-  async sendMessage(message: string, conversationId?: number): Promise<ChatResponse> {
+  async sendMessage(message: string, conversationId?: number, systemPrompt?: string): Promise<ChatResponse> {
     const payload: any = { message };
     if (conversationId) {
       payload.conversation_id = conversationId;
+    }
+    if (systemPrompt) {
+      payload.system_prompt = systemPrompt;
     }
 
     const response = await fetch(`${API_URL}/api/chat`, {
@@ -55,11 +58,15 @@ export class ChatService {
     onChunk: OnChunkCallback,
     onConversation?: OnConversationCallback,
     conversationId?: number,
-    onModel?: OnModelCallback
+    onModel?: OnModelCallback,
+    systemPrompt?: string
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
       payload.conversation_id = conversationId;
+    }
+    if (systemPrompt) {
+      payload.system_prompt = systemPrompt;
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {
