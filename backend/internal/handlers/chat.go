@@ -342,20 +342,8 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 
 // GetConversationMessagesHandler returns all messages from a specific conversation
 func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	username := r.Context().Value(auth.UserContextKey).(string)
-	// Extract conversation ID from URL path (/api/conversations/{id}/messages)
-	path := r.URL.Path
-	parts := strings.Split(path, "/")
-	if len(parts) < 4 {
-		http.Error(w, "Invalid URL", http.StatusBadRequest)
-		return
-	}
-	convIDStr := parts[3]
+	convIDStr := r.PathValue("id")
 	log.Printf("Get conversation messages request from user: %s for conversation: %s", username, convIDStr)
 
 	// Parse conversation ID
@@ -415,20 +403,8 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 
 // DeleteConversationHandler deletes a specific conversation
 func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	username := r.Context().Value(auth.UserContextKey).(string)
-	// Extract conversation ID from URL path (/api/conversations/{id})
-	path := r.URL.Path
-	parts := strings.Split(path, "/")
-	if len(parts) < 4 {
-		http.Error(w, "Invalid URL", http.StatusBadRequest)
-		return
-	}
-	convIDStr := parts[3]
+	convIDStr := r.PathValue("id")
 	log.Printf("Delete conversation request from user: %s for conversation: %s", username, convIDStr)
 
 	// Parse conversation ID

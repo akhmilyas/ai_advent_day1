@@ -12,6 +12,8 @@ docker compose down       # Stop all services
 ```
 
 ### Manual Backend Build & Run
+Requires **Go 1.25.3+** (uses Go 1.22+ HTTP routing features)
+
 ```bash
 cd backend
 go mod download
@@ -160,9 +162,13 @@ Automatically seeded on backend startup:
 
 ### Adding a New Chat Endpoint
 1. Add handler function to `backend/internal/handlers/chat.go`
-2. Register route in `backend/cmd/server/main.go` with auth middleware
-3. Update ChatService in `frontend/src/services/chat.ts` to call the endpoint
-4. Update Chat component callbacks if needed
+2. Register route in `backend/cmd/server/main.go` using Go 1.22+ method-based routing:
+   ```go
+   mux.HandleFunc("GET /api/new/endpoint", enableCORS(auth.AuthMiddleware(chatHandler.Handler)))
+   ```
+3. Extract path parameters with `r.PathValue("param_name")` if needed
+4. Update ChatService in `frontend/src/services/chat.ts` to call the endpoint
+5. Update Chat component callbacks if needed
 
 ### Modifying LLM Behavior
 - Edit `backend/internal/llm/openrouter.go`:
@@ -239,11 +245,25 @@ docker compose up
 - Database tests need PostgreSQL running or mocking
 - No mocking/stubbing framework currently in use
 
+## Routing (Go 1.25.3 Native)
+
+The backend uses Go 1.22+ native HTTP routing with method-based patterns:
+
+```go
+// Method-based routing syntax (Go 1.22+)
+mux.HandleFunc("GET /api/health", handler)
+mux.HandleFunc("POST /api/login", handler)
+mux.HandleFunc("GET /api/conversations/{id}/messages", handler)
+mux.HandleFunc("DELETE /api/conversations/{id}", handler)
+```
+
+Path parameters are extracted using `r.PathValue("id")`. This provides type-safe routing without third-party routers.
+
 ## File Organization Reference
 
 ```
 backend/
-  cmd/server/main.go              # Entry point, route setup, server start
+  cmd/server/main.go              # Entry point, route setup (Go 1.22+ method-based routing), server start
   internal/auth/auth.go           # JWT, login, register, middleware
   internal/db/                    # Database layer (postgres.go, user.go, conversation.go)
   internal/handlers/chat.go       # HTTP handlers for /api/chat endpoints

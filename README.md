@@ -7,7 +7,7 @@ A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter
 ## Quick Start
 
 ### Prerequisites
-- Docker & Docker Compose (recommended), or Go 1.21+, Node.js 20+, PostgreSQL 13+
+- Docker & Docker Compose (recommended), or Go 1.25.3+, Node.js 20+, PostgreSQL 13+
 - OpenRouter API key from [openrouter.ai](https://openrouter.ai/)
 
 ### Setup
@@ -115,7 +115,7 @@ DB_SSLMODE=disable
 
 ## Tech Stack
 
-**Backend**: Go 1.21, PostgreSQL 13, jwt-go, bcrypt
+**Backend**: Go 1.25.3, PostgreSQL 13, jwt-go, bcrypt
 **Frontend**: React 18, TypeScript, react-markdown, remark-gfm
 **Deployment**: Docker, Docker Compose
 
