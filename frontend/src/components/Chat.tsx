@@ -397,6 +397,7 @@ const styles = {
     gap: '10px',
     padding: '20px',
     borderTop: '1px solid',
+    boxShadow: 'none',
     transition: 'background-color 0.3s ease, border-color 0.3s ease',
   },
   input: {
@@ -404,8 +405,10 @@ const styles = {
     padding: '12px',
     fontSize: '16px',
     borderRadius: '4px',
+    boxShadow: 'none !important',
+    outline: 'none',
     transition: 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease',
-  },
+  } as React.CSSProperties,
   sendButton: {
     padding: '12px 24px',
     fontSize: '16px',
