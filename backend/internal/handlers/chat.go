@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 type ChatRequest struct {
@@ -80,7 +81,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		var req ChatRequest
-		err := websocket.ReadJSON(ctx, conn, &req)
+		err := wsjson.Read(ctx, conn, &req)
 		if err != nil {
 			log.Printf("Error reading message: %v", err)
 			break
@@ -93,7 +94,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Streaming chat request: %s", req.Message)
 
 		// Send start message
-		err = websocket.WriteJSON(ctx, conn, WSMessage{
+		err = wsjson.Write(ctx, conn, WSMessage{
 			Type:    "start",
 			Content: "",
 		})
@@ -104,7 +105,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Stream the response
 		streamErr := llm.StreamChat(req.Message, func(chunk string) error {
-			return websocket.WriteJSON(ctx, conn, WSMessage{
+			return wsjson.Write(ctx, conn, WSMessage{
 				Type:    "chunk",
 				Content: chunk,
 			})
@@ -112,7 +113,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 		if streamErr != nil {
 			log.Printf("Error streaming: %v", streamErr)
-			websocket.WriteJSON(ctx, conn, WSMessage{
+			wsjson.Write(ctx, conn, WSMessage{
 				Type:    "error",
 				Content: streamErr.Error(),
 			})
@@ -120,7 +121,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Send end message
-		err = websocket.WriteJSON(ctx, conn, WSMessage{
+		err = wsjson.Write(ctx, conn, WSMessage{
 			Type:    "end",
 			Content: "",
 		})
