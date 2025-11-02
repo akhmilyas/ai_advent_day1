@@ -71,7 +71,7 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
 ┌─────────────────────────────────────────────────────────────┐
 │               OpenRouter API (External)                      │
 │  - Model: Configurable via OPENROUTER_MODEL env var        │
-│  - Default: meta-llama/llama-3.1-8b-instruct:free          │
+│  - Default: meta-llama/llama-3.3-8b-instruct:free          │
 │  - Endpoint: https://openrouter.ai/api/v1/chat/completions │
 │  - Streaming: Server-Sent Events (SSE)                      │
 └─────────────────────────────────────────────────────────────┘
@@ -115,7 +115,7 @@ A fullstack chat application with Go backend and React TypeScript frontend, feat
    - Edit `.env` and configure:
      ```
      OPENROUTER_API_KEY=your_actual_api_key_here
-     OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct:free  # Optional, this is the default
+     OPENROUTER_MODEL=meta-llama/llama-3.3-8b-instruct:free  # Optional, this is the default
      ```
    - You can use any model supported by OpenRouter (e.g., `anthropic/claude-3.5-sonnet`, `openai/gpt-4`, etc.)
 
@@ -186,11 +186,11 @@ cd backend
 
 # Set environment variables (Unix/Mac)
 export OPENROUTER_API_KEY=your_api_key_here
-export OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct:free  # Optional
+export OPENROUTER_MODEL=meta-llama/llama-3.3-8b-instruct:free  # Optional
 
 # Or for Windows
 set OPENROUTER_API_KEY=your_api_key_here
-set OPENROUTER_MODEL=meta-llama/llama-3.1-8b-instruct:free
+set OPENROUTER_MODEL=meta-llama/llama-3.3-8b-instruct:free
 
 # Run the server
 go run ./cmd/server/main.go
@@ -305,7 +305,7 @@ Frontend will start on http://localhost:3000
 - **"OPENROUTER_API_KEY not configured"**: Make sure you set the environment variable
 - **"Connection refused"**: Check if backend is running on port 8080
 - **"Invalid token"**: Login again to get a new JWT token
-- **Model not working**: Check that `OPENROUTER_MODEL` is set to a valid model ID from OpenRouter. If not set, it defaults to `meta-llama/llama-3.1-8b-instruct:free`
+- **Model not working**: Check that `OPENROUTER_MODEL` is set to a valid model ID from OpenRouter. If not set, it defaults to `meta-llama/llama-3.3-8b-instruct:free`
 
 ### Frontend Issues
 - **Can't connect to backend**: Update `REACT_APP_API_URL` and `REACT_APP_WS_URL` in `.env`
