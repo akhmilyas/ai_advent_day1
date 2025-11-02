@@ -18,6 +18,20 @@ export interface Message {
   content: string;
 }
 
+export interface Conversation {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
 export type OnChunkCallback = (chunk: string) => void;
 export type OnConversationCallback = (conversationId: number) => void;
 export type OnModelCallback = (model: string) => void;
@@ -127,6 +141,54 @@ export class ChatService {
       }
     } finally {
       reader.releaseLock();
+    }
+  }
+
+  async getConversations(): Promise<Conversation[]> {
+    const response = await fetch(`${API_URL}/api/conversations`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...AuthService.getAuthHeader(),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversations');
+    }
+
+    const data = await response.json();
+    return data.conversations || [];
+  }
+
+  async getConversationMessages(conversationId: number): Promise<ConversationMessage[]> {
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...AuthService.getAuthHeader(),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversation messages');
+    }
+
+    const data = await response.json();
+    return data.messages || [];
+  }
+
+  async deleteConversation(conversationId: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...AuthService.getAuthHeader(),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to delete conversation');
     }
   }
 }

@@ -137,7 +137,7 @@ func AddMessage(conversationID int, role, content string) (*Message, error) {
 	}, nil
 }
 
-// GetConversationMessages retrieves all messages from a conversation
+// GetConversationMessages retrieves all messages from a conversation in LLM format
 func GetConversationMessages(conversationID int) ([]llm.Message, error) {
 	db := GetDB()
 
@@ -164,6 +164,35 @@ func GetConversationMessages(conversationID int) ([]llm.Message, error) {
 			Role:    role,
 			Content: content,
 		})
+	}
+
+	return messages, nil
+}
+
+// GetConversationMessagesWithDetails retrieves all messages with full details for frontend display
+func GetConversationMessagesWithDetails(conversationID int) ([]Message, error) {
+	db := GetDB()
+
+	query := `
+	SELECT id, conversation_id, role, content, created_at
+	FROM messages
+	WHERE conversation_id = $1
+	ORDER BY created_at ASC
+	`
+
+	rows, err := db.Query(query, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying messages: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
+			return nil, fmt.Errorf("error scanning message: %w", err)
+		}
+		messages = append(messages, msg)
 	}
 
 	return messages, nil

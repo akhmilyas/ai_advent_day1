@@ -60,6 +60,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               This prompt will be combined with the default system prompt to guide the AI's behavior.
             </p>
           </label>
+
+          {systemPrompt && (
+            <div style={styles.currentPromptSection}>
+              <p style={styles.currentPromptLabel}>Current System Prompt:</p>
+              <div style={styles.currentPromptDisplay}>
+                {systemPrompt}
+              </div>
+            </div>
+          )}
+
+          <label style={styles.editLabel}>
+            {systemPrompt ? 'Edit System Prompt' : 'Enter System Prompt'}
+          </label>
           <textarea
             value={tempPrompt}
             onChange={(e) => setTempPrompt(e.target.value)}
@@ -168,6 +181,39 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
     fontSize: '12px',
     color: colors.textSecondary,
     fontWeight: 'normal',
+  },
+  currentPromptSection: {
+    marginBottom: '16px',
+    padding: '12px',
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: '4px',
+    border: `1px solid ${colors.border}`,
+  },
+  currentPromptLabel: {
+    margin: '0 0 8px 0',
+    fontSize: '12px',
+    fontWeight: 'bold' as const,
+    color: colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+  },
+  currentPromptDisplay: {
+    fontSize: '13px',
+    lineHeight: '1.5',
+    color: colors.text,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+    maxHeight: '100px',
+    overflowY: 'auto' as const,
+    fontFamily: 'monospace',
+  },
+  editLabel: {
+    display: 'block',
+    marginTop: '12px',
+    marginBottom: '8px',
+    fontSize: '13px',
+    fontWeight: 'bold' as const,
+    color: colors.text,
   },
   textarea: {
     width: '100%',

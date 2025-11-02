@@ -6,6 +6,7 @@ import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 import { SettingsModal } from './SettingsModal';
+import { Sidebar } from './Sidebar';
 
 interface ChatProps {
   onLogout: () => void;
@@ -18,11 +19,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
+  const [conversationTitle, setConversationTitle] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<{ refreshConversations: () => Promise<void> }>(null);
 
   // Load system prompt from localStorage on mount
   useEffect(() => {
@@ -39,6 +42,30 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const handleSystemPromptChange = (prompt: string) => {
     setSystemPrompt(prompt);
     localStorage.setItem('systemPrompt', prompt);
+  };
+
+  const handleSelectConversation = async (convId: number, title: string) => {
+    try {
+      const convMessages = await chatService.current.getConversationMessages(convId);
+      setConversationId(convId);
+      setConversationTitle(title);
+      setMessages(
+        convMessages.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        }))
+      );
+    } catch (error) {
+      console.error('Error loading conversation:', error);
+      alert('Failed to load conversation');
+    }
+  };
+
+  const handleNewConversation = () => {
+    setConversationId(undefined);
+    setConversationTitle('');
+    setMessages([]);
+    setModel('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -75,6 +102,10 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         (convId) => {
           // Set conversation ID when received from server
           setConversationId(convId);
+          // Refresh sidebar to show new conversation if this is the first message
+          if (!conversationId && sidebarRef.current) {
+            sidebarRef.current.refreshConversations();
+          }
         },
         conversationId,
         (modelName) => {
@@ -106,12 +137,21 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   };
 
   return (
-    <div style={{ ...styles.container, backgroundColor: colors.background }}>
-      <div style={{ ...styles.header, backgroundColor: colors.header, borderBottomColor: colors.border }}>
-        <div>
-          <h2 style={{ ...styles.title, color: colors.text }}>AI Chat</h2>
-          {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
-        </div>
+    <div style={styles.appContainer}>
+      <Sidebar
+        ref={sidebarRef}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={handleNewConversation}
+        currentConversationId={conversationId}
+      />
+      <div style={{ ...styles.container, backgroundColor: colors.background }}>
+        <div style={{ ...styles.header, backgroundColor: colors.header, borderBottomColor: colors.border }}>
+          <div>
+            <h2 style={{ ...styles.title, color: colors.text }}>
+              {conversationTitle || 'AI Chat'}
+            </h2>
+            {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+          </div>
         <div style={styles.buttonGroup}>
           <button
             onClick={toggleTheme}
@@ -249,21 +289,27 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         </button>
       </form>
 
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        systemPrompt={systemPrompt}
-        onSystemPromptChange={handleSystemPromptChange}
-      />
+        <SettingsModal
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          systemPrompt={systemPrompt}
+          onSystemPromptChange={handleSystemPromptChange}
+        />
+      </div>
     </div>
   );
 };
 
 const styles = {
+  appContainer: {
+    display: 'flex',
+    height: '100vh',
+    width: '100%',
+  },
   container: {
     display: 'flex',
     flexDirection: 'column' as const,
-    height: '100vh',
+    flex: 1,
     transition: 'background-color 0.3s ease',
   },
   header: {

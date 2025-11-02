@@ -36,6 +36,22 @@ type ConversationsResponse struct {
 	Conversations []ConversationInfo `json:"conversations"`
 }
 
+type MessageData struct {
+	ID        int    `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+type MessagesResponse struct {
+	Messages []MessageData `json:"messages"`
+}
+
+type DeleteResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
 type ChatHandlers struct{}
 
 func NewChatHandlers() *ChatHandlers {
@@ -321,5 +337,140 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ConversationsResponse{
 		Conversations: convInfos,
+	})
+}
+
+// GetConversationMessagesHandler returns all messages from a specific conversation
+func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.Context().Value(auth.UserContextKey).(string)
+	// Extract conversation ID from URL path (/api/conversations/{id}/messages)
+	path := r.URL.Path
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+	convIDStr := parts[3]
+	log.Printf("Get conversation messages request from user: %s for conversation: %s", username, convIDStr)
+
+	// Parse conversation ID
+	var convID int
+	_, err := fmt.Sscanf(convIDStr, "%d", &convID)
+	if err != nil {
+		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[CHAT] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get conversation and verify ownership
+	conversation, err := db.GetConversation(convID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting conversation: %v", err)
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify user owns this conversation
+	if conversation.UserID != user.ID {
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	// Get messages for conversation
+	messages, err := db.GetConversationMessagesWithDetails(convID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting messages: %v", err)
+		http.Error(w, "Error retrieving messages", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	msgData := make([]MessageData, 0, len(messages))
+	for _, msg := range messages {
+		msgData = append(msgData, MessageData{
+			ID:        msg.ID,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			CreatedAt: msg.CreatedAt.String(),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MessagesResponse{
+		Messages: msgData,
+	})
+}
+
+// DeleteConversationHandler deletes a specific conversation
+func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.Context().Value(auth.UserContextKey).(string)
+	// Extract conversation ID from URL path (/api/conversations/{id})
+	path := r.URL.Path
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+	convIDStr := parts[3]
+	log.Printf("Delete conversation request from user: %s for conversation: %s", username, convIDStr)
+
+	// Parse conversation ID
+	var convID int
+	_, err := fmt.Sscanf(convIDStr, "%d", &convID)
+	if err != nil {
+		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[CHAT] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get conversation and verify ownership
+	conversation, err := db.GetConversation(convID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting conversation: %v", err)
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify user owns this conversation
+	if conversation.UserID != user.ID {
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	// Delete the conversation
+	if err := db.DeleteConversation(convID); err != nil {
+		log.Printf("[CHAT] Error deleting conversation: %v", err)
+		http.Error(w, "Error deleting conversation", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(DeleteResponse{
+		Success: true,
+		Message: "Conversation deleted successfully",
 	})
 }
