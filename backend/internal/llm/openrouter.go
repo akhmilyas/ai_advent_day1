@@ -41,6 +41,15 @@ func GetAPIKey() string {
 	return apiKey
 }
 
+func GetModel() string {
+	model := os.Getenv("OPENROUTER_MODEL")
+	if model == "" {
+		// Default to free LLaMA model
+		model = "meta-llama/llama-3.1-8b-instruct:free"
+	}
+	return model
+}
+
 func StreamChat(prompt string, callback StreamCallback) error {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
@@ -48,7 +57,7 @@ func StreamChat(prompt string, callback StreamCallback) error {
 	}
 
 	reqBody := ChatRequest{
-		Model: "meta-llama/llama-3.1-8b-instruct:free",
+		Model: GetModel(),
 		Messages: []Message{
 			{Role: "user", Content: prompt},
 		},
@@ -129,7 +138,7 @@ func Chat(prompt string) (string, error) {
 	}
 
 	reqBody := ChatRequest{
-		Model: "meta-llama/llama-3.1-8b-instruct:free",
+		Model: GetModel(),
 		Messages: []Message{
 			{Role: "user", Content: prompt},
 		},
