@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -56,8 +57,11 @@ func StreamChat(prompt string, callback StreamCallback) error {
 		return fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
+	model := GetModel()
+	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s", model)
+
 	reqBody := ChatRequest{
-		Model: GetModel(),
+		Model: model,
 		Messages: []Message{
 			{Role: "user", Content: prompt},
 		},
@@ -137,8 +141,11 @@ func Chat(prompt string) (string, error) {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
+	model := GetModel()
+	log.Printf("[LLM] Calling OpenRouter API with model: %s", model)
+
 	reqBody := ChatRequest{
-		Model: GetModel(),
+		Model: model,
 		Messages: []Message{
 			{Role: "user", Content: prompt},
 		},

@@ -46,9 +46,11 @@ func ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[CHAT] User input: %s", req.Message)
+
 	response, err := llm.Chat(req.Message)
 	if err != nil {
-		log.Printf("Error from LLM: %v", err)
+		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ChatResponse{
@@ -56,6 +58,8 @@ func ChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	log.Printf("[CHAT] LLM response: %s", response)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
@@ -91,7 +95,7 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		log.Printf("Streaming chat request: %s", req.Message)
+		log.Printf("[STREAM] User input: %s", req.Message)
 
 		// Send start message
 		err = wsjson.Write(ctx, conn, WSMessage{
@@ -103,8 +107,12 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		// Collect streamed response for logging
+		var fullResponse string
+
 		// Stream the response
 		streamErr := llm.StreamChat(req.Message, func(chunk string) error {
+			fullResponse += chunk
 			return wsjson.Write(ctx, conn, WSMessage{
 				Type:    "chunk",
 				Content: chunk,
@@ -112,13 +120,15 @@ func ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if streamErr != nil {
-			log.Printf("Error streaming: %v", streamErr)
+			log.Printf("[STREAM] Error streaming: %v", streamErr)
 			wsjson.Write(ctx, conn, WSMessage{
 				Type:    "error",
 				Content: streamErr.Error(),
 			})
 			continue
 		}
+
+		log.Printf("[STREAM] LLM response: %s", fullResponse)
 
 		// Send end message
 		err = wsjson.Write(ctx, conn, WSMessage{
