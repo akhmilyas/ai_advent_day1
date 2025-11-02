@@ -28,7 +28,7 @@ export const Sidebar = React.forwardRef<
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const chatService = new ChatService();
+    const chatService = React.useMemo(() => new ChatService(), []);
 
     useEffect(() => {
       loadConversations();
