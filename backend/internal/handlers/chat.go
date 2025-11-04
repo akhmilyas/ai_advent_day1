@@ -260,9 +260,9 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Send conversation ID as first event
-	fmt.Fprintf(w, "data: CONV_ID:%d\n\n", conversation.ID)
+	fmt.Fprintf(w, "data: CONV_ID:%s\n\n", conversation.ID)
 	flusher.Flush()
-	log.Printf("[CHAT] Sent conversation ID: %d", conversation.ID)
+	log.Printf("[CHAT] Sent conversation ID: %s", conversation.ID)
 
 	// Send model as second event
 	model := llm.GetModel()
