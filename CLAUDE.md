@@ -92,7 +92,7 @@ Backend: Saves full response to DB after streaming completes
   ↓
 Frontend: Message component renders based on format
   - text: ReactMarkdown
-  - json: renderJsonAsTable() with collapsible raw view
+  - json: renderJsonAsTree() with collapsible raw view
   - xml: renderXmlAsTree() with collapsible raw view
 ```
 
@@ -121,8 +121,8 @@ Frontend: Message component renders based on format
   - XML: Hardcoded schema-enforcement prompt + user schema
 - **Visual rendering**:
   - Text: ReactMarkdown with remark-gfm
-  - JSON: Table with Key/Value columns + collapsible raw JSON view
-  - XML: Tree structure with indentation + collapsible raw XML view
+  - JSON: Hierarchical tree structure supporting unlimited nesting depth + collapsible raw JSON view
+  - XML: Hierarchical tree structure with syntax highlighting + collapsible raw XML view
 
 ### LLM Parameter Management
 - **Format-aware parameters**: Different params for text vs structured formats
@@ -433,9 +433,10 @@ The application supports three response formats:
   - Reads from `conversationFormat`/`conversationSchema` props (for existing)
 
 - `Message.tsx`: Format-specific rendering
-  - `renderJsonAsTable()`: Parses JSON, displays as Key/Value table with collapsible raw view
-  - `renderXmlAsTree()`: Parses XML with DOMParser, displays as indented tree with collapsible raw view
+  - `renderJsonAsTree()`: Parses JSON, displays as hierarchical tree supporting nested objects/arrays at unlimited depth with collapsible raw view
+  - `renderXmlAsTree()`: Parses XML with DOMParser, displays as hierarchical tree with collapsible raw view
   - Uses `<details>/<summary>` HTML elements for collapsible raw views
+  - Recursive rendering for unlimited nesting depth
 
 **State Management:**
 ```typescript
@@ -494,40 +495,59 @@ func GetTemperature(format string) *float64 {
 ```
 [View Raw JSON ▼]  ← Collapsible details element
 
-┌─────────────────┬──────────────────────┐
-│ Key             │ Value                │
-├─────────────────┼──────────────────────┤
-│ name            │ John Doe             │
-│ age             │ 30                   │
-│ address         │ {"city": "NYC", ...} │
-└─────────────────┴──────────────────────┘
+user: {...}
+  ├─ name: "John Doe"
+  ├─ age: 30
+  ├─ active: true
+  ├─ tags: [3 items]
+  │   ├─ [0]: "developer"
+  │   ├─ [1]: "golang"
+  │   └─ [2]: "react"
+  └─ address: {...}
+      ├─ city: "New York"
+      ├─ country: "USA"
+      └─ coordinates: {...}
+          ├─ lat: 40.7128
+          └─ lng: -74.0060
 ```
+
+**Rendering Features:**
+- Unlimited nesting depth with 20px indentation per level
+- Color-coded keys (primary color, bold) and values
+- Type-aware rendering: strings with quotes, numbers/booleans plain
+- Arrays show `[N items]` count with indexed elements `[0]`, `[1]`, etc.
+- Objects show `{...}` indicator with nested properties
+- Left border (3px solid) for structure clarity
+- Alternating backgrounds for nested levels
+- Handles null values with italic styling
 
 **XML Format:**
 ```
 [View Raw XML ▼]  ← Collapsible details element
 
 <response version="1.0">
-  <question>
-    What is AI?
-  </question>
-  <answer>
-    Artificial Intelligence
-  </answer>
+  ├─ <question>
+  │   What is AI?
+  └─ <answer>
+      Artificial Intelligence
 </response>
 
-↑ Rendered as indented tree with:
+↑ Rendered as hierarchical tree with:
 - Color-coded tags (primary color)
-- Left border (3px solid)
-- Alternating backgrounds
+- Attribute display with proper formatting
+- Left border (3px solid) for structure
+- Alternating backgrounds for nesting levels
 - Inline text for simple elements
+- Full tree expansion for complex elements
 ```
 
 ### Key Features
 
 1. **Format Locking**: Prevents format changes mid-conversation (data integrity)
 2. **Schema Enforcement**: LLM instructed to strictly follow schema
-3. **Visual Parsing**: JSON/XML parsed and rendered visually
-4. **Raw View**: Collapsible access to original response
-5. **Error Handling**: Falls back to `<pre>` if parsing fails
-6. **Parameter Optimization**: Lower temperature for structured formats (0.3 vs 0.7)
+3. **Visual Parsing**: JSON/XML parsed and rendered as hierarchical trees
+4. **Unlimited Nesting**: Recursive rendering supports any depth of nested structures
+5. **Raw View**: Collapsible access to original response
+6. **Error Handling**: Falls back to `<pre>` if parsing fails
+7. **Parameter Optimization**: Lower temperature for structured formats (0.3 vs 0.7)
+8. **Type-Aware Display**: Different colors/styles for strings, numbers, booleans, null, objects, arrays

@@ -63,8 +63,8 @@ OpenRouter LLM (External)
 
 **Response Formats**:
 - `text` (default): Plain text with markdown rendering
-- `json`: Structured JSON with schema validation, rendered as interactive table
-- `xml`: Structured XML with schema validation, rendered as collapsible tree view
+- `json`: Structured JSON with schema validation, rendered as hierarchical tree
+- `xml`: Structured XML with schema validation, rendered as hierarchical tree
 
 **Note**: Response format is locked after the first message in a conversation and stored in the database
 
@@ -132,8 +132,8 @@ DB_SSLMODE=disable
 2. **Start New Chat**: Click sidebar or start typing
 3. **Choose Response Format** (before first message):
    - **Plain Text**: Natural conversation with markdown rendering
-   - **JSON**: Structured data with schema, displayed as table with raw view
-   - **XML**: Structured markup with schema, displayed as collapsible tree
+   - **JSON**: Structured data with schema, displayed as hierarchical tree with raw view
+   - **XML**: Structured markup with schema, displayed as hierarchical tree with raw view
 4. **Chat**: Type message → AI streams response in real-time
 5. **System Prompt** (text mode only): Click ⚙️ Settings to customize AI behavior
 6. **Schema** (JSON/XML only): Define structure in Settings before first message
@@ -155,12 +155,12 @@ DB_SSLMODE=disable
 - **Chat**: SSE streaming, optimistic UI updates, full conversation history
 - **Response Formats**:
   - **Text**: Markdown rendering with tables, lists, code blocks
-  - **JSON**: Schema-based structured output, rendered as interactive table with raw view toggle
-  - **XML**: Schema-based structured output, rendered as collapsible tree with syntax highlighting
+  - **JSON**: Schema-based structured output, rendered as hierarchical tree supporting nested objects/arrays with raw view toggle
+  - **XML**: Schema-based structured output, rendered as hierarchical tree with syntax highlighting and raw view toggle
 - **Format-Aware LLM Parameters**: Different temperature/top-p/top-k for text vs structured formats
 - **System Prompts**: Custom prompts for text conversations (stored in localStorage)
 - **Schema Validation**: Define JSON/XML schemas for structured responses
-- **Visual Rendering**: Tables for JSON, tree view for XML
+- **Visual Rendering**: Hierarchical tree structures for both JSON and XML with unlimited nesting support
 - **Format Locking**: Response format cannot be changed after conversation starts
 - **Database**: PostgreSQL persistence with format/schema stored per conversation
 - **Security**: JWT validation, CORS, API key management
