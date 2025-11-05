@@ -2,11 +2,17 @@ import React, { useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 
+export type ResponseFormat = 'text' | 'json' | 'xml';
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   systemPrompt: string;
   onSystemPromptChange: (prompt: string) => void;
+  responseFormat: ResponseFormat;
+  onResponseFormatChange: (format: ResponseFormat) => void;
+  responseSchema: string;
+  onResponseSchemaChange: (schema: string) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -14,18 +20,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   systemPrompt,
   onSystemPromptChange,
+  responseFormat,
+  onResponseFormatChange,
+  responseSchema,
+  onResponseSchemaChange,
 }) => {
   const [tempPrompt, setTempPrompt] = useState(systemPrompt);
+  const [tempFormat, setTempFormat] = useState<ResponseFormat>(responseFormat);
+  const [tempSchema, setTempSchema] = useState(responseSchema);
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
 
   const handleSave = () => {
     onSystemPromptChange(tempPrompt);
+    onResponseFormatChange(tempFormat);
+    onResponseSchemaChange(tempSchema);
     onClose();
   };
 
   const handleCancel = () => {
     setTempPrompt(systemPrompt);
+    setTempFormat(responseFormat);
+    setTempSchema(responseSchema);
     onClose();
   };
 
@@ -54,31 +70,94 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div style={styles.content}>
+          {/* Response Format Selection */}
           <label style={styles.label}>
-            System Prompt
+            Response Format
             <p style={styles.description}>
-              This prompt will be combined with the default system prompt to guide the AI's behavior.
+              Choose how the AI should format its responses.
             </p>
           </label>
+          <div style={styles.radioGroup}>
+            <label style={styles.radioLabel}>
+              <input
+                type="radio"
+                value="text"
+                checked={tempFormat === 'text'}
+                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                style={styles.radio}
+              />
+              <span>Plain Text (Default)</span>
+            </label>
+            <label style={styles.radioLabel}>
+              <input
+                type="radio"
+                value="json"
+                checked={tempFormat === 'json'}
+                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                style={styles.radio}
+              />
+              <span>JSON</span>
+            </label>
+            <label style={styles.radioLabel}>
+              <input
+                type="radio"
+                value="xml"
+                checked={tempFormat === 'xml'}
+                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                style={styles.radio}
+              />
+              <span>XML</span>
+            </label>
+          </div>
 
-          {systemPrompt && (
-            <div style={styles.currentPromptSection}>
-              <p style={styles.currentPromptLabel}>Current System Prompt:</p>
-              <div style={styles.currentPromptDisplay}>
-                {systemPrompt}
-              </div>
+          {/* Schema Input for JSON/XML */}
+          {(tempFormat === 'json' || tempFormat === 'xml') && (
+            <div style={styles.schemaSection}>
+              <label style={styles.label}>
+                Response Schema (Required)
+                <p style={styles.description}>
+                  Define the structure for the {tempFormat.toUpperCase()} response. This schema will be used to instruct the AI on the exact format to follow.
+                </p>
+              </label>
+              <textarea
+                value={tempSchema}
+                onChange={(e) => setTempSchema(e.target.value)}
+                placeholder={`Enter ${tempFormat.toUpperCase()} schema example...`}
+                style={styles.textarea}
+              />
             </div>
           )}
 
-          <label style={styles.editLabel}>
-            {systemPrompt ? 'Edit System Prompt' : 'Enter System Prompt'}
-          </label>
-          <textarea
-            value={tempPrompt}
-            onChange={(e) => setTempPrompt(e.target.value)}
-            placeholder="Enter your custom system prompt..."
-            style={styles.textarea}
-          />
+          {/* System Prompt (only for text format) */}
+          {tempFormat === 'text' && (
+            <>
+              <label style={styles.label}>
+                System Prompt
+                <p style={styles.description}>
+                  This prompt will be combined with the default system prompt to guide the AI's behavior.
+                </p>
+              </label>
+
+              {systemPrompt && (
+                <div style={styles.currentPromptSection}>
+                  <p style={styles.currentPromptLabel}>Current System Prompt:</p>
+                  <div style={styles.currentPromptDisplay}>
+                    {systemPrompt}
+                  </div>
+                </div>
+              )}
+
+              <label style={styles.editLabel}>
+                {systemPrompt ? 'Edit System Prompt' : 'Enter System Prompt'}
+              </label>
+              <textarea
+                value={tempPrompt}
+                onChange={(e) => setTempPrompt(e.target.value)}
+                placeholder="Enter your custom system prompt..."
+                style={styles.textarea}
+              />
+            </>
+          )}
         </div>
 
         <div style={styles.footer}>
@@ -133,7 +212,7 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
     zIndex: 1000,
     minWidth: '500px',
     maxWidth: '600px',
-    maxHeight: '80vh',
+    maxHeight: '85vh',
     display: 'flex',
     flexDirection: 'column' as const,
     transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
@@ -258,5 +337,31 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
     cursor: 'pointer',
     fontSize: '14px',
     transition: 'opacity 0.3s ease',
+  },
+  radioGroup: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '10px',
+    marginBottom: '20px',
+  },
+  radioLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: colors.text,
+    fontSize: '14px',
+    cursor: 'pointer',
+    padding: '8px',
+    borderRadius: '4px',
+    transition: 'background-color 0.2s ease',
+  },
+  radio: {
+    cursor: 'pointer',
+    width: '16px',
+    height: '16px',
+  },
+  schemaSection: {
+    marginTop: '16px',
+    marginBottom: '16px',
   },
 });

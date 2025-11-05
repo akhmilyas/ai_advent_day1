@@ -16,6 +16,8 @@ type ChatRequest struct {
 	Messages        []llm.Message `json:"messages,omitempty"`
 	ConversationID  string        `json:"conversation_id,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
+	ResponseFormat  string        `json:"response_format,omitempty"`
+	ResponseSchema  string        `json:"response_schema,omitempty"`
 }
 
 type ChatResponse struct {
@@ -251,8 +253,18 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Build the system prompt based on response format
+	var effectiveSystemPrompt string
+	if req.ResponseFormat == "json" && req.ResponseSchema != "" {
+		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", req.ResponseSchema)
+	} else if req.ResponseFormat == "xml" && req.ResponseSchema != "" {
+		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", req.ResponseSchema)
+	} else {
+		effectiveSystemPrompt = req.SystemPrompt
+	}
+
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory, req.SystemPrompt)
+	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())

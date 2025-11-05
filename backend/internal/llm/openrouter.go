@@ -20,9 +20,12 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature *float64  `json:"temperature,omitempty"`
+	TopP        *float64  `json:"top_p,omitempty"`
+	TopK        *int      `json:"top_k,omitempty"`
 }
 
 type ChatResponse struct {
@@ -58,6 +61,39 @@ func GetSystemPrompt() string {
 	return systemPrompt
 }
 
+func GetTemperature() *float64 {
+	tempStr := os.Getenv("OPENROUTER_TEMPERATURE")
+	if tempStr != "" {
+		var temp float64
+		if _, err := fmt.Sscanf(tempStr, "%f", &temp); err == nil {
+			return &temp
+		}
+	}
+	return nil
+}
+
+func GetTopP() *float64 {
+	topPStr := os.Getenv("OPENROUTER_TOP_P")
+	if topPStr != "" {
+		var topP float64
+		if _, err := fmt.Sscanf(topPStr, "%f", &topP); err == nil {
+			return &topP
+		}
+	}
+	return nil
+}
+
+func GetTopK() *int {
+	topKStr := os.Getenv("OPENROUTER_TOP_K")
+	if topKStr != "" {
+		var topK int
+		if _, err := fmt.Sscanf(topKStr, "%d", &topK); err == nil {
+			return &topK
+		}
+	}
+	return nil
+}
+
 func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
 	systemPrompt := GetSystemPrompt()
 	// If custom prompt is provided, append it to the default system prompt
@@ -81,9 +117,12 @@ func ChatWithHistory(messages []Message, customSystemPrompt string) (string, err
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
-		Model:    model,
-		Messages: messagesWithHistory,
-		Stream:   false,
+		Model:       model,
+		Messages:    messagesWithHistory,
+		Stream:      false,
+		Temperature: GetTemperature(),
+		TopP:        GetTopP(),
+		TopK:        GetTopK(),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -138,9 +177,12 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string) (<-cha
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
-		Model:    model,
-		Messages: messagesWithHistory,
-		Stream:   true,
+		Model:       model,
+		Messages:    messagesWithHistory,
+		Stream:      true,
+		Temperature: GetTemperature(),
+		TopP:        GetTopP(),
+		TopK:        GetTopK(),
 	}
 
 	jsonData, err := json.Marshal(reqBody)

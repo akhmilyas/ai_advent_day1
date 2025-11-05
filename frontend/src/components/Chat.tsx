@@ -5,7 +5,7 @@ import { ChatService, Message } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
-import { SettingsModal } from './SettingsModal';
+import { SettingsModal, ResponseFormat } from './SettingsModal';
 import { Sidebar } from './Sidebar';
 
 interface ChatProps {
@@ -22,16 +22,27 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [conversationTitle, setConversationTitle] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
+  const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
+  const [responseSchema, setResponseSchema] = useState<string>('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<{ refreshConversations: () => Promise<void> }>(null);
 
-  // Load system prompt from localStorage on mount
+  // Load settings from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem('systemPrompt');
-    if (saved) {
-      setSystemPrompt(saved);
+    const savedPrompt = localStorage.getItem('systemPrompt');
+    const savedFormat = localStorage.getItem('responseFormat');
+    const savedSchema = localStorage.getItem('responseSchema');
+
+    if (savedPrompt) {
+      setSystemPrompt(savedPrompt);
+    }
+    if (savedFormat && (savedFormat === 'text' || savedFormat === 'json' || savedFormat === 'xml')) {
+      setResponseFormat(savedFormat as ResponseFormat);
+    }
+    if (savedSchema) {
+      setResponseSchema(savedSchema);
     }
   }, []);
 
@@ -42,6 +53,16 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const handleSystemPromptChange = (prompt: string) => {
     setSystemPrompt(prompt);
     localStorage.setItem('systemPrompt', prompt);
+  };
+
+  const handleResponseFormatChange = (format: ResponseFormat) => {
+    setResponseFormat(format);
+    localStorage.setItem('responseFormat', format);
+  };
+
+  const handleResponseSchemaChange = (schema: string) => {
+    setResponseSchema(schema);
+    localStorage.setItem('responseSchema', schema);
   };
 
   const handleSelectConversation = async (convId: string, title: string) => {
@@ -112,7 +133,9 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           // Set model when received from server
           setModel(modelName);
         },
-        systemPrompt
+        systemPrompt,
+        responseFormat,
+        responseSchema
       );
       setLoading(false);
     } catch (error) {
@@ -294,6 +317,10 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           onClose={() => setSettingsOpen(false)}
           systemPrompt={systemPrompt}
           onSystemPromptChange={handleSystemPromptChange}
+          responseFormat={responseFormat}
+          onResponseFormatChange={handleResponseFormatChange}
+          responseSchema={responseSchema}
+          onResponseSchemaChange={handleResponseSchemaChange}
         />
       </div>
     </div>
