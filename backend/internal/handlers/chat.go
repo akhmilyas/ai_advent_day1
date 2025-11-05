@@ -139,7 +139,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Get response with full conversation history
-	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt)
+	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -269,7 +269,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt)
+	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())

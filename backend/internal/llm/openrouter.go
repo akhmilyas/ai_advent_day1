@@ -61,7 +61,8 @@ func GetSystemPrompt() string {
 	return systemPrompt
 }
 
-func GetTemperature() *float64 {
+func GetTemperature(format string) *float64 {
+	// Check if environment variable is set
 	tempStr := os.Getenv("OPENROUTER_TEMPERATURE")
 	if tempStr != "" {
 		var temp float64
@@ -69,10 +70,20 @@ func GetTemperature() *float64 {
 			return &temp
 		}
 	}
-	return nil
+
+	// Format-aware defaults if no env var set
+	if format == "json" || format == "xml" {
+		temp := 0.3 // Lower temperature for structured outputs
+		return &temp
+	}
+
+	// Default for text conversations
+	temp := 0.7
+	return &temp
 }
 
-func GetTopP() *float64 {
+func GetTopP(format string) *float64 {
+	// Check if environment variable is set
 	topPStr := os.Getenv("OPENROUTER_TOP_P")
 	if topPStr != "" {
 		var topP float64
@@ -80,10 +91,20 @@ func GetTopP() *float64 {
 			return &topP
 		}
 	}
-	return nil
+
+	// Format-aware defaults if no env var set
+	if format == "json" || format == "xml" {
+		topP := 0.8 // Lower diversity for structured outputs
+		return &topP
+	}
+
+	// Default for text conversations
+	topP := 0.9
+	return &topP
 }
 
-func GetTopK() *int {
+func GetTopK(format string) *int {
+	// Check if environment variable is set
 	topKStr := os.Getenv("OPENROUTER_TOP_K")
 	if topKStr != "" {
 		var topK int
@@ -91,7 +112,16 @@ func GetTopK() *int {
 			return &topK
 		}
 	}
-	return nil
+
+	// Format-aware defaults if no env var set
+	if format == "json" || format == "xml" {
+		topK := 20 // Smaller token pool for structured outputs
+		return &topK
+	}
+
+	// Default for text conversations
+	topK := 40
+	return &topK
 }
 
 func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
@@ -105,14 +135,14 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message, customSystemPrompt string) (string, error) {
+func ChatWithHistory(messages []Message, customSystemPrompt string, format string) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := GetModel()
-	log.Printf("[LLM] Calling OpenRouter API with model: %s, message history count: %d", model, len(messages))
+	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
@@ -120,9 +150,9 @@ func ChatWithHistory(messages []Message, customSystemPrompt string) (string, err
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      false,
-		Temperature: GetTemperature(),
-		TopP:        GetTopP(),
-		TopK:        GetTopK(),
+		Temperature: GetTemperature(format),
+		TopP:        GetTopP(format),
+		TopK:        GetTopK(format),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -165,14 +195,14 @@ func ChatWithHistory(messages []Message, customSystemPrompt string) (string, err
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string) (<-chan string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := GetModel()
-	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, message history count: %d", model, len(messages))
+	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
@@ -180,9 +210,9 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string) (<-cha
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      true,
-		Temperature: GetTemperature(),
-		TopP:        GetTopP(),
-		TopK:        GetTopK(),
+		Temperature: GetTemperature(format),
+		TopP:        GetTopP(format),
+		TopK:        GetTopK(format),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
