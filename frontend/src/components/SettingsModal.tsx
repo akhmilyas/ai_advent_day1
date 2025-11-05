@@ -111,7 +111,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div style={styles.content}>
-          {/* Response Format Selection */}
+          {/* Locked Configuration Info */}
           {isExistingConversation && (
             <div style={styles.infoBox}>
               <p style={styles.infoText}>
@@ -121,91 +121,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 This conversation is using <strong>{displayFormat.toUpperCase()}</strong> format.
                 The response format cannot be changed after a conversation has started.
               </p>
-              {(displayFormat === 'json' || displayFormat === 'xml') && displaySchema && (
-                <div style={styles.schemaPreview}>
-                  <p style={styles.schemaPreviewLabel}>Active Schema:</p>
-                  <pre style={styles.schemaPreviewContent}>{displaySchema}</pre>
-                </div>
-              )}
             </div>
           )}
 
-          <label style={styles.label}>
-            Response Format
-            <p style={styles.description}>
-              {isExistingConversation
-                ? 'This format is locked for this conversation.'
-                : 'Choose how the AI should format its responses.'}
-            </p>
-          </label>
-          <div style={styles.radioGroup}>
-            <label style={{
-              ...styles.radioLabel,
-              ...(isExistingConversation && displayFormat === 'text' ? styles.radioLabelSelected : {}),
-            }}>
-              <input
-                type="radio"
-                name="responseFormat"
-                value="text"
-                checked={displayFormat === 'text'}
-                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                style={{
-                  ...styles.radio,
-                  accentColor: colors.buttonPrimary,
-                  opacity: isExistingConversation ? 0.7 : 1,
-                }}
-                disabled={isExistingConversation}
-              />
-              <span>Plain Text (Default)</span>
-              {isExistingConversation && displayFormat === 'text' && (
-                <span style={styles.selectedIndicator}>✓</span>
-              )}
-            </label>
-            <label style={{
-              ...styles.radioLabel,
-              ...(isExistingConversation && displayFormat === 'json' ? styles.radioLabelSelected : {}),
-            }}>
-              <input
-                type="radio"
-                name="responseFormat"
-                value="json"
-                checked={displayFormat === 'json'}
-                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                style={{
-                  ...styles.radio,
-                  accentColor: colors.buttonPrimary,
-                  opacity: isExistingConversation ? 0.7 : 1,
-                }}
-                disabled={isExistingConversation}
-              />
-              <span>JSON</span>
-              {isExistingConversation && displayFormat === 'json' && (
-                <span style={styles.selectedIndicator}>✓</span>
-              )}
-            </label>
-            <label style={{
-              ...styles.radioLabel,
-              ...(isExistingConversation && displayFormat === 'xml' ? styles.radioLabelSelected : {}),
-            }}>
-              <input
-                type="radio"
-                name="responseFormat"
-                value="xml"
-                checked={displayFormat === 'xml'}
-                onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                style={{
-                  ...styles.radio,
-                  accentColor: colors.buttonPrimary,
-                  opacity: isExistingConversation ? 0.7 : 1,
-                }}
-                disabled={isExistingConversation}
-              />
-              <span>XML</span>
-              {isExistingConversation && displayFormat === 'xml' && (
-                <span style={styles.selectedIndicator}>✓</span>
-              )}
-            </label>
-          </div>
+          {/* Only show radio buttons for new conversations */}
+          {!isExistingConversation && (
+            <>
+              <label style={styles.label}>
+                Response Format
+                <p style={styles.description}>
+                  Choose how the AI should format its responses.
+                </p>
+              </label>
+              <div style={styles.radioGroup}>
+                <label style={styles.radioLabel}>
+                  <input
+                    type="radio"
+                    name="responseFormat"
+                    value="text"
+                    checked={displayFormat === 'text'}
+                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                    style={styles.radio}
+                  />
+                  <span>Plain Text (Default)</span>
+                </label>
+                <label style={styles.radioLabel}>
+                  <input
+                    type="radio"
+                    name="responseFormat"
+                    value="json"
+                    checked={displayFormat === 'json'}
+                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                    style={styles.radio}
+                  />
+                  <span>JSON</span>
+                </label>
+                <label style={styles.radioLabel}>
+                  <input
+                    type="radio"
+                    name="responseFormat"
+                    value="xml"
+                    checked={displayFormat === 'xml'}
+                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
+                    style={styles.radio}
+                  />
+                  <span>XML</span>
+                </label>
+              </div>
+            </>
+          )}
 
           {/* Schema Display/Input for JSON/XML */}
           {(displayFormat === 'json' || displayFormat === 'xml') && (
@@ -463,23 +427,11 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
     padding: '8px',
     borderRadius: '4px',
     transition: 'background-color 0.2s ease',
-    position: 'relative' as const,
-  },
-  radioLabelSelected: {
-    backgroundColor: colors.surfaceAlt,
-    border: `2px solid ${colors.buttonPrimary}`,
-    fontWeight: 'bold' as const,
   },
   radio: {
     cursor: 'pointer',
     width: '16px',
     height: '16px',
-  },
-  selectedIndicator: {
-    marginLeft: 'auto',
-    color: colors.buttonPrimary,
-    fontSize: '18px',
-    fontWeight: 'bold' as const,
   },
   schemaSection: {
     marginTop: '16px',
