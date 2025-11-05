@@ -11,11 +11,91 @@ interface MessageProps {
   colors: ReturnType<typeof getTheme>;
 }
 
-// Helper function to render JSON as a table
-const renderJsonAsTable = (jsonString: string, colors: ReturnType<typeof getTheme>) => {
+// Helper function to render JSON as a tree structure
+const renderJsonAsTree = (jsonString: string, colors: ReturnType<typeof getTheme>) => {
   try {
     const parsed = JSON.parse(jsonString);
-    const entries = Object.entries(parsed);
+
+    // Recursive function to render JSON nodes
+    const renderNode = (value: any, key?: string, level: number = 0): React.ReactNode => {
+      const indent = level * 20;
+
+      // Handle null
+      if (value === null) {
+        return (
+          <div key={key} style={{ marginLeft: `${indent}px`, padding: '4px 8px' }}>
+            {key && <span style={{ color: colors.buttonPrimary, fontWeight: 'bold', fontFamily: 'monospace' }}>{key}: </span>}
+            <span style={{ color: colors.textSecondary, fontFamily: 'monospace', fontStyle: 'italic' }}>null</span>
+          </div>
+        );
+      }
+
+      // Handle primitives (string, number, boolean)
+      if (typeof value !== 'object') {
+        return (
+          <div key={key} style={{ marginLeft: `${indent}px`, padding: '4px 8px' }}>
+            {key && <span style={{ color: colors.buttonPrimary, fontWeight: 'bold', fontFamily: 'monospace' }}>{key}: </span>}
+            <span style={{
+              color: typeof value === 'string' ? colors.text : colors.textSecondary,
+              fontFamily: 'monospace'
+            }}>
+              {typeof value === 'string' ? `"${value}"` : String(value)}
+            </span>
+          </div>
+        );
+      }
+
+      // Handle arrays
+      if (Array.isArray(value)) {
+        return (
+          <div key={key} style={{ marginLeft: `${indent}px` }}>
+            <div style={{
+              padding: '6px 8px',
+              backgroundColor: level % 2 === 0 ? colors.surfaceAlt : 'transparent',
+              borderLeft: `3px solid ${colors.buttonPrimary}`,
+              borderRadius: '4px',
+              marginBottom: '4px',
+            }}>
+              {key && <span style={{ color: colors.buttonPrimary, fontWeight: 'bold', fontFamily: 'monospace' }}>{key}: </span>}
+              <span style={{ color: colors.textSecondary, fontFamily: 'monospace' }}>[{value.length} items]</span>
+            </div>
+            <div>
+              {value.map((item, idx) => (
+                <React.Fragment key={idx}>
+                  {renderNode(item, `[${idx}]`, level + 1)}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      // Handle objects
+      const entries = Object.entries(value);
+      return (
+        <div key={key} style={{ marginLeft: `${indent}px` }}>
+          {key && (
+            <div style={{
+              padding: '6px 8px',
+              backgroundColor: level % 2 === 0 ? colors.surfaceAlt : 'transparent',
+              borderLeft: `3px solid ${colors.buttonPrimary}`,
+              borderRadius: '4px',
+              marginBottom: '4px',
+            }}>
+              <span style={{ color: colors.buttonPrimary, fontWeight: 'bold', fontFamily: 'monospace' }}>{key}</span>
+              <span style={{ color: colors.textSecondary, fontFamily: 'monospace' }}> {'{'}...{'}'}</span>
+            </div>
+          )}
+          <div>
+            {entries.map(([k, v]) => (
+              <React.Fragment key={k}>
+                {renderNode(v, k, level + 1)}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      );
+    };
 
     return (
       <div>
@@ -48,56 +128,15 @@ const renderJsonAsTable = (jsonString: string, colors: ReturnType<typeof getThem
           </pre>
         </details>
 
-        {/* Show table view */}
-        <table style={{
-          width: '100%',
-          borderCollapse: 'collapse',
+        {/* Show tree view */}
+        <div style={{
           border: `1px solid ${colors.border}`,
+          borderRadius: '4px',
+          padding: '12px',
+          backgroundColor: colors.background,
         }}>
-          <thead>
-            <tr style={{ backgroundColor: colors.surfaceAlt }}>
-              <th style={{
-                padding: '10px',
-                textAlign: 'left',
-                fontWeight: 'bold',
-                borderBottom: `2px solid ${colors.border}`,
-                width: '30%',
-              }}>
-                Key
-              </th>
-              <th style={{
-                padding: '10px',
-                textAlign: 'left',
-                fontWeight: 'bold',
-                borderBottom: `2px solid ${colors.border}`,
-              }}>
-                Value
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map(([key, value], idx) => (
-              <tr key={idx} style={{ borderBottom: `1px solid ${colors.border}` }}>
-                <td style={{
-                  padding: '10px',
-                  fontFamily: 'monospace',
-                  fontWeight: 'bold',
-                  verticalAlign: 'top',
-                }}>
-                  {key}
-                </td>
-                <td style={{
-                  padding: '10px',
-                  fontFamily: 'monospace',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}>
-                  {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {renderNode(parsed)}
+        </div>
       </div>
     );
   } catch (e) {
@@ -282,7 +321,7 @@ export const Message: React.FC<MessageProps> = ({ role, content, conversationFor
       <div style={role === 'assistant' ? styles.assistantContent : styles.messageContent}>
         {role === 'assistant' ? (
           conversationFormat === 'json' ? (
-            renderJsonAsTable(content, colors)
+            renderJsonAsTree(content, colors)
           ) : conversationFormat === 'xml' ? (
             renderXmlAsTree(content, colors)
           ) : (
