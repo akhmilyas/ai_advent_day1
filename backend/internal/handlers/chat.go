@@ -28,10 +28,12 @@ type ChatResponse struct {
 }
 
 type ConversationInfo struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	ResponseFormat string `json:"response_format"`
+	ResponseSchema string `json:"response_schema"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type ConversationsResponse struct {
@@ -106,12 +108,12 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Create new conversation with first message as title
+		// Create new conversation with first message as title and specified format
 		title := req.Message
 		if len(title) > 100 {
 			title = title[:100]
 		}
-		conversation, err = db.CreateConversation(user.ID, title)
+		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
 		if err != nil {
 			log.Printf("[CHAT] Error creating conversation: %v", err)
 			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
@@ -211,12 +213,12 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 			return
 		}
 	} else {
-		// Create new conversation with first message as title
+		// Create new conversation with first message as title and specified format
 		title := req.Message
 		if len(title) > 100 {
 			title = title[:100]
 		}
-		conversation, err = db.CreateConversation(user.ID, title)
+		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
 		if err != nil {
 			log.Printf("[CHAT] Error creating conversation: %v", err)
 			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
@@ -253,15 +255,18 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Build the system prompt based on response format
+	// Build the system prompt based on conversation's response format (stored in DB)
 	var effectiveSystemPrompt string
-	if req.ResponseFormat == "json" && req.ResponseSchema != "" {
-		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", req.ResponseSchema)
-	} else if req.ResponseFormat == "xml" && req.ResponseSchema != "" {
-		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", req.ResponseSchema)
+	if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
+		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
+	} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
+		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
 	} else {
+		// For text format, use custom system prompt from request
 		effectiveSystemPrompt = req.SystemPrompt
 	}
+
+	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
 	// Get streaming response from LLM
 	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt)
@@ -339,10 +344,12 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	convInfos := make([]ConversationInfo, 0, len(conversations))
 	for _, conv := range conversations {
 		convInfos = append(convInfos, ConversationInfo{
-			ID:        conv.ID,
-			Title:     conv.Title,
-			CreatedAt: conv.CreatedAt.String(),
-			UpdatedAt: conv.UpdatedAt.String(),
+			ID:             conv.ID,
+			Title:          conv.Title,
+			ResponseFormat: conv.ResponseFormat,
+			ResponseSchema: conv.ResponseSchema,
+			CreatedAt:      conv.CreatedAt.String(),
+			UpdatedAt:      conv.UpdatedAt.String(),
 		})
 	}
 

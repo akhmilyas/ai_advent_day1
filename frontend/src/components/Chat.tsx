@@ -24,6 +24,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
   const [responseSchema, setResponseSchema] = useState<string>('');
+  const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
+  const [conversationSchema, setConversationSchema] = useState<string>('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -67,9 +69,20 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
   const handleSelectConversation = async (convId: string, title: string) => {
     try {
+      // Get conversation details to retrieve format and schema
+      const conversations = await chatService.current.getConversations();
+      const conversation = conversations.find(c => c.id === convId);
+
       const convMessages = await chatService.current.getConversationMessages(convId);
       setConversationId(convId);
       setConversationTitle(title);
+
+      // Set conversation format and schema from the database
+      if (conversation) {
+        setConversationFormat((conversation.response_format || 'text') as ResponseFormat);
+        setConversationSchema(conversation.response_schema || '');
+      }
+
       setMessages(
         convMessages.map((msg) => ({
           role: msg.role,
@@ -87,6 +100,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     setConversationTitle('');
     setMessages([]);
     setModel('');
+    setConversationFormat(null);
+    setConversationSchema('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -123,9 +138,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         (convId) => {
           // Set conversation ID when received from server
           setConversationId(convId);
-          // Refresh sidebar to show new conversation if this is the first message
-          if (!conversationId && sidebarRef.current) {
-            sidebarRef.current.refreshConversations();
+          // For new conversations, set the format and schema that was used
+          if (!conversationId) {
+            setConversationFormat(responseFormat);
+            setConversationSchema(responseSchema);
+            // Refresh sidebar to show new conversation
+            if (sidebarRef.current) {
+              sidebarRef.current.refreshConversations();
+            }
           }
         },
         conversationId,
@@ -134,8 +154,9 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           setModel(modelName);
         },
         systemPrompt,
-        responseFormat,
-        responseSchema
+        // Only send format/schema for new conversations
+        conversationId ? undefined : responseFormat,
+        conversationId ? undefined : responseSchema
       );
       setLoading(false);
     } catch (error) {
@@ -173,7 +194,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             <h2 style={{ ...styles.title, color: colors.text }}>
               {conversationTitle || 'AI Chat'}
             </h2>
-            {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+            <div style={styles.headerInfo}>
+              {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+              {conversationFormat && conversationFormat !== 'text' && (
+                <p style={{ ...styles.formatLabel, color: colors.textSecondary }}>
+                  Format: <strong style={{ color: colors.text }}>{conversationFormat.toUpperCase()}</strong>
+                </p>
+              )}
+            </div>
           </div>
         <div style={styles.buttonGroup}>
           <button
@@ -321,6 +349,9 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           onResponseFormatChange={handleResponseFormatChange}
           responseSchema={responseSchema}
           onResponseSchemaChange={handleResponseSchemaChange}
+          conversationFormat={conversationFormat}
+          conversationSchema={conversationSchema}
+          isExistingConversation={conversationId !== undefined}
         />
       </div>
     </div>
@@ -351,10 +382,22 @@ const styles = {
     margin: 0,
     transition: 'color 0.3s ease',
   },
+  headerInfo: {
+    display: 'flex',
+    gap: '16px',
+    alignItems: 'center',
+    flexWrap: 'wrap' as const,
+  },
   modelLabel: {
     margin: '4px 0 0 0',
     fontSize: '12px',
     opacity: 0.7,
+    transition: 'color 0.3s ease',
+  },
+  formatLabel: {
+    margin: '4px 0 0 0',
+    fontSize: '12px',
+    opacity: 0.8,
     transition: 'color 0.3s ease',
   },
   buttonGroup: {

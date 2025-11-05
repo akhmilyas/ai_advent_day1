@@ -14,6 +14,8 @@ export interface Message {
 export interface Conversation {
   id: string;
   title: string;
+  response_format: string;
+  response_schema: string;
   created_at: string;
   updated_at: string;
 }
