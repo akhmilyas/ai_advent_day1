@@ -133,6 +133,17 @@ func createTables() error {
 		return fmt.Errorf("error creating conversations table: %w", err)
 	}
 
+	// Add response_format and response_schema columns if they don't exist
+	alterTableSQL := `
+	ALTER TABLE conversations
+	ADD COLUMN IF NOT EXISTS response_format VARCHAR(10) DEFAULT 'text',
+	ADD COLUMN IF NOT EXISTS response_schema TEXT;
+	`
+
+	if _, err := db.Exec(alterTableSQL); err != nil {
+		return fmt.Errorf("error altering conversations table: %w", err)
+	}
+
 	// Create messages table
 	messagesTableSQL := `
 	CREATE TABLE IF NOT EXISTS messages (

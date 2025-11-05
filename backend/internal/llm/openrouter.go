@@ -20,9 +20,12 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature *float64  `json:"temperature,omitempty"`
+	TopP        *float64  `json:"top_p,omitempty"`
+	TopK        *int      `json:"top_k,omitempty"`
 }
 
 type ChatResponse struct {
@@ -58,6 +61,75 @@ func GetSystemPrompt() string {
 	return systemPrompt
 }
 
+func GetTemperature(format string) *float64 {
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TEMPERATURE"
+	} else {
+		envVar = "OPENROUTER_TEXT_TEMPERATURE"
+	}
+
+	// Get value from environment
+	tempStr := os.Getenv(envVar)
+	if tempStr != "" {
+		var temp float64
+		if _, err := fmt.Sscanf(tempStr, "%f", &temp); err == nil {
+			return &temp
+		}
+	}
+
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
+}
+
+func GetTopP(format string) *float64 {
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TOP_P"
+	} else {
+		envVar = "OPENROUTER_TEXT_TOP_P"
+	}
+
+	// Get value from environment
+	topPStr := os.Getenv(envVar)
+	if topPStr != "" {
+		var topP float64
+		if _, err := fmt.Sscanf(topPStr, "%f", &topP); err == nil {
+			return &topP
+		}
+	}
+
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
+}
+
+func GetTopK(format string) *int {
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TOP_K"
+	} else {
+		envVar = "OPENROUTER_TEXT_TOP_K"
+	}
+
+	// Get value from environment
+	topKStr := os.Getenv(envVar)
+	if topKStr != "" {
+		var topK int
+		if _, err := fmt.Sscanf(topKStr, "%d", &topK); err == nil {
+			return &topK
+		}
+	}
+
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
+}
+
 func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
 	systemPrompt := GetSystemPrompt()
 	// If custom prompt is provided, append it to the default system prompt
@@ -69,21 +141,24 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message, customSystemPrompt string) (string, error) {
+func ChatWithHistory(messages []Message, customSystemPrompt string, format string) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := GetModel()
-	log.Printf("[LLM] Calling OpenRouter API with model: %s, message history count: %d", model, len(messages))
+	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
-		Model:    model,
-		Messages: messagesWithHistory,
-		Stream:   false,
+		Model:       model,
+		Messages:    messagesWithHistory,
+		Stream:      false,
+		Temperature: GetTemperature(format),
+		TopP:        GetTopP(format),
+		TopK:        GetTopK(format),
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -126,21 +201,24 @@ func ChatWithHistory(messages []Message, customSystemPrompt string) (string, err
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string) (<-chan string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := GetModel()
-	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, message history count: %d", model, len(messages))
+	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
-		Model:    model,
-		Messages: messagesWithHistory,
-		Stream:   true,
+		Model:       model,
+		Messages:    messagesWithHistory,
+		Stream:      true,
+		Temperature: GetTemperature(format),
+		TopP:        GetTopP(format),
+		TopK:        GetTopK(format),
 	}
 
 	jsonData, err := json.Marshal(reqBody)

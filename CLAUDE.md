@@ -69,17 +69,19 @@ User sends message
   ↓
 Frontend: ChatService.streamMessage()
   ↓
-POST /api/chat/stream {message, conversation_id?, system_prompt?}
+POST /api/chat/stream {message, conversation_id?, system_prompt?, response_format?, response_schema?}
   ↓
 Backend: ChatStreamHandler
   - Validates JWT token
-  - Gets/creates conversation
+  - Gets/creates conversation (with format/schema if new)
   - Adds user message to DB
   - Fetches full conversation history
+  - Builds format-specific system prompt (JSON/XML get schema instructions)
   ↓
-Backend: llm.ChatWithHistoryStream()
+Backend: llm.ChatWithHistoryStream(messages, systemPrompt, format)
+  - Selects format-aware LLM parameters (temperature, top_p, top_k)
   - Builds message array: [system_prompt, user1, assistant1, ..., user_n]
-  - Calls OpenRouter API (https://openrouter.ai/api/v1/chat/completions)
+  - Calls OpenRouter API with format-specific parameters
   - Streams response via SSE format (data: {chunk}\n\n)
   ↓
 Frontend: onChunk callback accumulates chunks
@@ -87,6 +89,11 @@ Frontend: onChunk callback accumulates chunks
   - Update UI incrementally
   ↓
 Backend: Saves full response to DB after streaming completes
+  ↓
+Frontend: Message component renders based on format
+  - text: ReactMarkdown
+  - json: renderJsonAsTree() with collapsible raw view
+  - xml: renderXmlAsTree() with collapsible raw view
 ```
 
 ### Authentication Flow
@@ -104,10 +111,26 @@ Backend: Saves full response to DB after streaming completes
 - Newlines escaped on backend (`\n` → `\\n`) and unescaped on frontend for protocol compliance
 - Metadata (conversation ID, model name) sent as special SSE events with prefixes (CONV_ID:, MODEL:)
 
-### System Prompt Design
-- User-provided prompts are **appended** to environment default: `"{env_default}\n\nAdditional instructions: {user_prompt}"`
-- Session-wide (not per-conversation) setting stored in localStorage
-- Passed per-request to allow dynamic changes without UI restart
+### Response Format System
+- **Three formats supported**: text (default), JSON, XML
+- **Format locking**: Once a conversation starts, format cannot be changed (stored in DB)
+- **Schema support**: JSON and XML formats require schema definition
+- **Format-specific system prompts**:
+  - Text: Uses custom user prompt from localStorage
+  - JSON: Hardcoded schema-enforcement prompt + user schema
+  - XML: Hardcoded schema-enforcement prompt + user schema
+- **Visual rendering**:
+  - Text: ReactMarkdown with remark-gfm
+  - JSON: Hierarchical tree structure supporting unlimited nesting depth + collapsible raw JSON view
+  - XML: Hierarchical tree structure with syntax highlighting + collapsible raw XML view
+
+### LLM Parameter Management
+- **Format-aware parameters**: Different params for text vs structured formats
+- **Environment-based configuration**:
+  - `OPENROUTER_TEXT_TEMPERATURE/TOP_P/TOP_K` for text conversations (0.7/0.9/40)
+  - `OPENROUTER_STRUCTURED_TEMPERATURE/TOP_P/TOP_K` for JSON/XML (0.3/0.8/20)
+- **No hardcoded constants**: All values come from environment variables
+- **Automatic selection**: Backend chooses params based on conversation.ResponseFormat from DB
 
 ### Message History Pattern
 - Full conversation history sent with every request to LLM for context coherence
@@ -115,9 +138,10 @@ Backend: Saves full response to DB after streaming completes
 - History retrieved in chronological order from DB
 
 ### Frontend State Management
-- Minimal React state: messages, input, loading, conversationId, model, systemPrompt, theme, settingsOpen
+- Minimal React state: messages, input, loading, conversationId, model, systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, theme, settingsOpen
 - No Redux/complex state library; useContext for theme, useState for component local state
-- localStorage for persistence: auth_token, theme, systemPrompt
+- localStorage for persistence: auth_token, theme, systemPrompt, responseFormat, responseSchema
+- Component separation: Message.tsx handles format-specific rendering
 
 ### UUID for All IDs
 - All database IDs use PostgreSQL UUID type (Universally Unique Identifiers)
@@ -132,7 +156,15 @@ Backend: Saves full response to DB after streaming completes
 ```sql
 users (id UUID PRIMARY KEY, username VARCHAR UNIQUE, email VARCHAR, password_hash VARCHAR, created_at TIMESTAMP)
   ↓
-conversations (id UUID PRIMARY KEY, user_id UUID REFERENCES users, title VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP)
+conversations (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users,
+  title VARCHAR,
+  response_format VARCHAR(10) DEFAULT 'text',    -- NEW: 'text', 'json', or 'xml'
+  response_schema TEXT,                          -- NEW: Schema definition for structured formats
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+)
   ↓
 messages (id UUID PRIMARY KEY, conversation_id UUID REFERENCES conversations, role VARCHAR, content TEXT, created_at TIMESTAMP)
 ```
@@ -140,10 +172,13 @@ messages (id UUID PRIMARY KEY, conversation_id UUID REFERENCES conversations, ro
 **Key Features:**
 - All IDs are UUID type for distributed system compatibility and collision resistance
 - Conversations auto-created on first message with first 100 chars as title
+- **response_format** column locks format after first message (cannot be changed)
+- **response_schema** stores JSON/XML schema definition for validation
 - Messages store role ('user' or 'assistant') for history reconstruction
 - Cascade deletes prevent orphaned records
 - Indexes on user_id and conversation_id for query performance
 - UUIDs generated on the backend using `google/uuid` package
+- COALESCE used in queries to handle NULL values: `COALESCE(response_format, 'text')`
 
 ## Configuration
 
@@ -155,6 +190,13 @@ messages (id UUID PRIMARY KEY, conversation_id UUID REFERENCES conversations, ro
 **Optional (with defaults):**
 - `OPENROUTER_MODEL` - Model ID (default: meta-llama/llama-3.3-8b-instruct:free)
 - `OPENROUTER_SYSTEM_PROMPT` - Default system prompt (default: "You are a helpful assistant.")
+- **Format-Aware LLM Parameters**:
+  - `OPENROUTER_TEXT_TEMPERATURE` - Temperature for text conversations (default: 0.7)
+  - `OPENROUTER_TEXT_TOP_P` - Top-P for text conversations (default: 0.9)
+  - `OPENROUTER_TEXT_TOP_K` - Top-K for text conversations (default: 40)
+  - `OPENROUTER_STRUCTURED_TEMPERATURE` - Temperature for JSON/XML (default: 0.3)
+  - `OPENROUTER_STRUCTURED_TOP_P` - Top-P for JSON/XML (default: 0.8)
+  - `OPENROUTER_STRUCTURED_TOP_K` - Top-K for JSON/XML (default: 20)
 - `DB_HOST` - PostgreSQL host (default: postgres in Docker, localhost locally)
 - `DB_PORT` - PostgreSQL port (default: 5432)
 - `DB_USER` - PostgreSQL user (default: postgres)
@@ -356,3 +398,156 @@ data: [DONE]
 ```
 
 Parsed by frontend: unescape newlines, collect chunks, skip [DONE]
+
+## Response Format Feature
+
+### Overview
+The application supports three response formats:
+1. **Text** (default) - Natural conversation with markdown
+2. **JSON** - Structured data with schema enforcement
+3. **XML** - Structured markup with schema enforcement
+
+### Format Selection Flow
+
+**New Conversation:**
+1. User opens Settings (⚙️) before sending first message
+2. Selects format (Text/JSON/XML) via radio buttons
+3. If JSON/XML selected, must provide schema in textarea
+4. Sends first message → format + schema saved to DB
+5. Format is now **locked** for this conversation
+
+**Existing Conversation:**
+1. User opens Settings (⚙️)
+2. Sees "🔒 Locked Configuration" message with current format
+3. Radio buttons are hidden (not disabled)
+4. Schema is shown in read-only textarea
+5. Cannot change format or schema
+
+### Frontend Implementation
+
+**Components:**
+- `SettingsModal.tsx`: Format/schema configuration UI
+  - Shows radio buttons only for new conversations (`!isExistingConversation`)
+  - Locks configuration for existing conversations
+  - Stores format/schema in localStorage (for new conversations)
+  - Reads from `conversationFormat`/`conversationSchema` props (for existing)
+
+- `Message.tsx`: Format-specific rendering
+  - `renderJsonAsTree()`: Parses JSON, displays as hierarchical tree supporting nested objects/arrays at unlimited depth with collapsible raw view
+  - `renderXmlAsTree()`: Parses XML with DOMParser, displays as hierarchical tree with collapsible raw view
+  - Uses `<details>/<summary>` HTML elements for collapsible raw views
+  - Recursive rendering for unlimited nesting depth
+
+**State Management:**
+```typescript
+// User preferences (new conversations)
+const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
+const [responseSchema, setResponseSchema] = useState<string>('');
+
+// Locked conversation settings (existing conversations)
+const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
+const [conversationSchema, setConversationSchema] = useState<string>('');
+```
+
+### Backend Implementation
+
+**Database:**
+```sql
+conversations (
+  response_format VARCHAR(10) DEFAULT 'text',
+  response_schema TEXT
+)
+```
+
+**Handler Logic:**
+```go
+// Create new conversation
+if req.ConversationID == "" {
+  conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
+}
+
+// Build format-specific system prompt
+if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
+  effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema...")
+} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
+  effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema...")
+} else {
+  effectiveSystemPrompt = req.SystemPrompt  // User's custom prompt
+}
+
+// Pass format to LLM for parameter selection
+chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat)
+```
+
+**LLM Parameter Selection:**
+```go
+func GetTemperature(format string) *float64 {
+  if format == "json" || format == "xml" {
+    return os.Getenv("OPENROUTER_STRUCTURED_TEMPERATURE")  // 0.3
+  }
+  return os.Getenv("OPENROUTER_TEXT_TEMPERATURE")  // 0.7
+}
+```
+
+### Visual Rendering
+
+**JSON Format:**
+```
+[View Raw JSON ▼]  ← Collapsible details element
+
+user: {...}
+  ├─ name: "John Doe"
+  ├─ age: 30
+  ├─ active: true
+  ├─ tags: [3 items]
+  │   ├─ [0]: "developer"
+  │   ├─ [1]: "golang"
+  │   └─ [2]: "react"
+  └─ address: {...}
+      ├─ city: "New York"
+      ├─ country: "USA"
+      └─ coordinates: {...}
+          ├─ lat: 40.7128
+          └─ lng: -74.0060
+```
+
+**Rendering Features:**
+- Unlimited nesting depth with 20px indentation per level
+- Color-coded keys (primary color, bold) and values
+- Type-aware rendering: strings with quotes, numbers/booleans plain
+- Arrays show `[N items]` count with indexed elements `[0]`, `[1]`, etc.
+- Objects show `{...}` indicator with nested properties
+- Left border (3px solid) for structure clarity
+- Alternating backgrounds for nested levels
+- Handles null values with italic styling
+
+**XML Format:**
+```
+[View Raw XML ▼]  ← Collapsible details element
+
+<response version="1.0">
+  ├─ <question>
+  │   What is AI?
+  └─ <answer>
+      Artificial Intelligence
+</response>
+
+↑ Rendered as hierarchical tree with:
+- Color-coded tags (primary color)
+- Attribute display with proper formatting
+- Left border (3px solid) for structure
+- Alternating backgrounds for nesting levels
+- Inline text for simple elements
+- Full tree expansion for complex elements
+```
+
+### Key Features
+
+1. **Format Locking**: Prevents format changes mid-conversation (data integrity)
+2. **Schema Enforcement**: LLM instructed to strictly follow schema
+3. **Visual Parsing**: JSON/XML parsed and rendered as hierarchical trees
+4. **Unlimited Nesting**: Recursive rendering supports any depth of nested structures
+5. **Raw View**: Collapsible access to original response
+6. **Error Handling**: Falls back to `<pre>` if parsing fails
+7. **Parameter Optimization**: Lower temperature for structured formats (0.3 vs 0.7)
+8. **Type-Aware Display**: Different colors/styles for strings, numbers, booleans, null, objects, arrays

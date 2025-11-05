@@ -11,11 +11,13 @@ import (
 
 // Conversation represents a conversation in the database
 type Conversation struct {
-	ID        string
-	UserID    string
-	Title     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             string
+	UserID         string
+	Title          string
+	ResponseFormat string
+	ResponseSchema string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Message represents a message in a conversation
@@ -28,31 +30,38 @@ type Message struct {
 }
 
 // CreateConversation creates a new conversation for a user
-func CreateConversation(userID string, title string) (*Conversation, error) {
+func CreateConversation(userID string, title string, responseFormat string, responseSchema string) (*Conversation, error) {
 	db := GetDB()
 
 	convID := uuid.New().String()
 	var createdAt, updatedAt time.Time
 
+	// Default to 'text' format if not specified
+	if responseFormat == "" {
+		responseFormat = "text"
+	}
+
 	query := `
-	INSERT INTO conversations (id, user_id, title)
-	VALUES ($1, $2, $3)
+	INSERT INTO conversations (id, user_id, title, response_format, response_schema)
+	VALUES ($1, $2, $3, $4, $5)
 	RETURNING id, created_at, updated_at
 	`
 
-	err := db.QueryRow(query, convID, userID, title).Scan(&convID, &createdAt, &updatedAt)
+	err := db.QueryRow(query, convID, userID, title, responseFormat, responseSchema).Scan(&convID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("error creating conversation: %w", err)
 	}
 
-	log.Printf("[DB] Created new conversation: %s for user: %s", convID, userID)
+	log.Printf("[DB] Created new conversation: %s for user: %s with format: %s", convID, userID, responseFormat)
 
 	return &Conversation{
-		ID:        convID,
-		UserID:    userID,
-		Title:     title,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		ID:             convID,
+		UserID:         userID,
+		Title:          title,
+		ResponseFormat: responseFormat,
+		ResponseSchema: responseSchema,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
 	}, nil
 }
 
@@ -61,7 +70,7 @@ func GetConversationsByUser(userID string) ([]Conversation, error) {
 	db := GetDB()
 
 	query := `
-	SELECT id, user_id, title, created_at, updated_at
+	SELECT id, user_id, title, COALESCE(response_format, 'text'), COALESCE(response_schema, ''), created_at, updated_at
 	FROM conversations
 	WHERE user_id = $1
 	ORDER BY updated_at DESC
@@ -76,7 +85,7 @@ func GetConversationsByUser(userID string) ([]Conversation, error) {
 	var conversations []Conversation
 	for rows.Next() {
 		var conv Conversation
-		if err := rows.Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.CreatedAt, &conv.UpdatedAt); err != nil {
+		if err := rows.Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.ResponseFormat, &conv.ResponseSchema, &conv.CreatedAt, &conv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning conversation: %w", err)
 		}
 		conversations = append(conversations, conv)
@@ -91,12 +100,12 @@ func GetConversation(convID string) (*Conversation, error) {
 
 	var conv Conversation
 	query := `
-	SELECT id, user_id, title, created_at, updated_at
+	SELECT id, user_id, title, COALESCE(response_format, 'text'), COALESCE(response_schema, ''), created_at, updated_at
 	FROM conversations
 	WHERE id = $1
 	`
 
-	err := db.QueryRow(query, convID).Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.CreatedAt, &conv.UpdatedAt)
+	err := db.QueryRow(query, convID).Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.ResponseFormat, &conv.ResponseSchema, &conv.CreatedAt, &conv.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving conversation: %w", err)
 	}

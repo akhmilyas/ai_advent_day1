@@ -14,6 +14,8 @@ export interface Message {
 export interface Conversation {
   id: string;
   title: string;
+  response_format: string;
+  response_schema: string;
   created_at: string;
   updated_at: string;
 }
@@ -36,7 +38,9 @@ export class ChatService {
     onConversation?: OnConversationCallback,
     conversationId?: string,
     onModel?: OnModelCallback,
-    systemPrompt?: string
+    systemPrompt?: string,
+    responseFormat?: string,
+    responseSchema?: string
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -44,6 +48,12 @@ export class ChatService {
     }
     if (systemPrompt) {
       payload.system_prompt = systemPrompt;
+    }
+    if (responseFormat) {
+      payload.response_format = responseFormat;
+    }
+    if (responseSchema) {
+      payload.response_schema = responseSchema;
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {

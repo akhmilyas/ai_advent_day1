@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { ChatService, Message } from '../services/chat';
+import { ChatService, Message as ChatMessage } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
-import { SettingsModal } from './SettingsModal';
+import { SettingsModal, ResponseFormat } from './SettingsModal';
 import { Sidebar } from './Sidebar';
+import { Message } from './Message';
 
 interface ChatProps {
   onLogout: () => void;
@@ -15,23 +14,36 @@ interface ChatProps {
 export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const { theme, toggleTheme } = useTheme();
   const colors = getTheme(theme === 'dark');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [conversationTitle, setConversationTitle] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
+  const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
+  const [responseSchema, setResponseSchema] = useState<string>('');
+  const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
+  const [conversationSchema, setConversationSchema] = useState<string>('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<{ refreshConversations: () => Promise<void> }>(null);
 
-  // Load system prompt from localStorage on mount
+  // Load settings from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem('systemPrompt');
-    if (saved) {
-      setSystemPrompt(saved);
+    const savedPrompt = localStorage.getItem('systemPrompt');
+    const savedFormat = localStorage.getItem('responseFormat');
+    const savedSchema = localStorage.getItem('responseSchema');
+
+    if (savedPrompt) {
+      setSystemPrompt(savedPrompt);
+    }
+    if (savedFormat && (savedFormat === 'text' || savedFormat === 'json' || savedFormat === 'xml')) {
+      setResponseFormat(savedFormat as ResponseFormat);
+    }
+    if (savedSchema) {
+      setResponseSchema(savedSchema);
     }
   }, []);
 
@@ -44,11 +56,32 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     localStorage.setItem('systemPrompt', prompt);
   };
 
+  const handleResponseFormatChange = (format: ResponseFormat) => {
+    setResponseFormat(format);
+    localStorage.setItem('responseFormat', format);
+  };
+
+  const handleResponseSchemaChange = (schema: string) => {
+    setResponseSchema(schema);
+    localStorage.setItem('responseSchema', schema);
+  };
+
   const handleSelectConversation = async (convId: string, title: string) => {
     try {
+      // Get conversation details to retrieve format and schema
+      const conversations = await chatService.current.getConversations();
+      const conversation = conversations.find(c => c.id === convId);
+
       const convMessages = await chatService.current.getConversationMessages(convId);
       setConversationId(convId);
       setConversationTitle(title);
+
+      // Set conversation format and schema from the database
+      if (conversation) {
+        setConversationFormat((conversation.response_format || 'text') as ResponseFormat);
+        setConversationSchema(conversation.response_schema || '');
+      }
+
       setMessages(
         convMessages.map((msg) => ({
           role: msg.role,
@@ -66,6 +99,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     setConversationTitle('');
     setMessages([]);
     setModel('');
+    setConversationFormat(null);
+    setConversationSchema('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,9 +137,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         (convId) => {
           // Set conversation ID when received from server
           setConversationId(convId);
-          // Refresh sidebar to show new conversation if this is the first message
-          if (!conversationId && sidebarRef.current) {
-            sidebarRef.current.refreshConversations();
+          // For new conversations, set the format and schema that was used
+          if (!conversationId) {
+            setConversationFormat(responseFormat);
+            setConversationSchema(responseSchema);
+            // Refresh sidebar to show new conversation
+            if (sidebarRef.current) {
+              sidebarRef.current.refreshConversations();
+            }
           }
         },
         conversationId,
@@ -112,7 +152,10 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           // Set model when received from server
           setModel(modelName);
         },
-        systemPrompt
+        systemPrompt,
+        // Only send format/schema for new conversations
+        conversationId ? undefined : responseFormat,
+        conversationId ? undefined : responseSchema
       );
       setLoading(false);
     } catch (error) {
@@ -150,7 +193,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             <h2 style={{ ...styles.title, color: colors.text }}>
               {conversationTitle || 'AI Chat'}
             </h2>
-            {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+            <div style={styles.headerInfo}>
+              {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
+              {conversationFormat && conversationFormat !== 'text' && (
+                <p style={{ ...styles.formatLabel, color: colors.textSecondary }}>
+                  Format: <strong style={{ color: colors.text }}>{conversationFormat.toUpperCase()}</strong>
+                </p>
+              )}
+            </div>
           </div>
         <div style={styles.buttonGroup}>
           <button
@@ -198,57 +248,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         )}
 
         {messages.map((msg, idx) => (
-          <div
+          <Message
             key={idx}
-            style={{
-              ...styles.message,
-              ...(msg.role === 'user'
-                ? {
-                    ...styles.userMessage,
-                    backgroundColor: colors.userMessageBg,
-                    color: colors.userMessageText,
-                  }
-                : {
-                    ...styles.assistantMessage,
-                    backgroundColor: colors.assistantMessageBg,
-                    borderColor: colors.assistantMessageBorder,
-                    color: colors.assistantMessageText,
-                  }),
-            }}
-          >
-            <div style={{ ...styles.messageRole, opacity: 0.7 }}>
-              {msg.role === 'user' ? 'You' : 'AI'}
-            </div>
-            <div style={msg.role === 'assistant' ? styles.assistantContent : styles.messageContent}>
-              {msg.role === 'assistant' ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => <h1 style={{ marginTop: '16px', marginBottom: '12px', fontSize: '28px', fontWeight: 'bold' }}>{children}</h1>,
-                    h2: ({ children }) => <h2 style={{ marginTop: '14px', marginBottom: '10px', fontSize: '24px', fontWeight: 'bold' }}>{children}</h2>,
-                    h3: ({ children }) => <h3 style={{ marginTop: '12px', marginBottom: '8px', fontSize: '20px', fontWeight: 'bold' }}>{children}</h3>,
-                    p: ({ children }) => <p style={{ marginBottom: '12px' }}>{children}</p>,
-                    ul: ({ children }) => <ul style={{ marginLeft: '20px', marginBottom: '12px', paddingLeft: '20px' }}>{children}</ul>,
-                    ol: ({ children }) => <ol style={{ marginLeft: '20px', marginBottom: '12px', paddingLeft: '20px' }}>{children}</ol>,
-                    li: ({ children }) => <li style={{ marginBottom: '6px' }}>{children}</li>,
-                    code: ({ children }) => <code style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '3px', fontFamily: 'monospace', fontSize: '14px' }}>{children}</code>,
-                    pre: ({ children }) => <pre style={{ backgroundColor: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '6px', overflow: 'auto', marginBottom: '12px', fontFamily: 'monospace' }}>{children}</pre>,
-                    blockquote: ({ children }) => <blockquote style={{ borderLeft: '4px solid', paddingLeft: '12px', marginLeft: '0', marginBottom: '12px', opacity: 0.8 }}>{children}</blockquote>,
-                    table: ({ children }) => <table style={{ borderCollapse: 'collapse', marginBottom: '12px', border: '1px solid rgba(255,255,255,0.2)', width: '100%' }}>{children}</table>,
-                    thead: ({ children }) => <thead style={{ backgroundColor: 'rgba(0,0,0,0.2)', borderBottom: '2px solid rgba(255,255,255,0.3)' }}>{children}</thead>,
-                    tbody: ({ children }) => <tbody>{children}</tbody>,
-                    tr: ({ children }) => <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>{children}</tr>,
-                    th: ({ children }) => <th style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold' }}>{children}</th>,
-                    td: ({ children }) => <td style={{ padding: '10px' }}>{children}</td>,
-                  }}
-                >
-                  {msg.content}
-                </ReactMarkdown>
-              ) : (
-                msg.content
-              )}
-            </div>
-          </div>
+            role={msg.role}
+            content={msg.content}
+            conversationFormat={conversationFormat}
+            colors={colors}
+          />
         ))}
 
         <div ref={messagesEndRef} />
@@ -294,6 +300,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           onClose={() => setSettingsOpen(false)}
           systemPrompt={systemPrompt}
           onSystemPromptChange={handleSystemPromptChange}
+          responseFormat={responseFormat}
+          onResponseFormatChange={handleResponseFormatChange}
+          responseSchema={responseSchema}
+          onResponseSchemaChange={handleResponseSchemaChange}
+          conversationFormat={conversationFormat}
+          conversationSchema={conversationSchema}
+          isExistingConversation={conversationId !== undefined}
         />
       </div>
     </div>
@@ -324,10 +337,22 @@ const styles = {
     margin: 0,
     transition: 'color 0.3s ease',
   },
+  headerInfo: {
+    display: 'flex',
+    gap: '16px',
+    alignItems: 'center',
+    flexWrap: 'wrap' as const,
+  },
   modelLabel: {
     margin: '4px 0 0 0',
     fontSize: '12px',
     opacity: 0.7,
+    transition: 'color 0.3s ease',
+  },
+  formatLabel: {
+    margin: '4px 0 0 0',
+    fontSize: '12px',
+    opacity: 0.8,
     transition: 'color 0.3s ease',
   },
   buttonGroup: {
@@ -363,34 +388,6 @@ const styles = {
     textAlign: 'center' as const,
     marginTop: '100px',
     transition: 'color 0.3s ease',
-  },
-  message: {
-    padding: '12px 16px',
-    borderRadius: '8px',
-    maxWidth: '70%',
-    transition: 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease',
-  },
-  userMessage: {
-    alignSelf: 'flex-end',
-    border: 'none',
-  },
-  assistantMessage: {
-    alignSelf: 'flex-start',
-    border: '1px solid',
-  },
-  messageRole: {
-    fontSize: '12px',
-    fontWeight: 'bold' as const,
-    marginBottom: '4px',
-  },
-  messageContent: {
-    fontSize: '16px',
-    lineHeight: '1.5',
-    whiteSpace: 'pre-wrap' as const,
-  },
-  assistantContent: {
-    fontSize: '16px',
-    lineHeight: '1.6',
   },
   inputContainer: {
     display: 'flex',
