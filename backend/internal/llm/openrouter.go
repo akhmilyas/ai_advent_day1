@@ -62,8 +62,17 @@ func GetSystemPrompt() string {
 }
 
 func GetTemperature(format string) *float64 {
-	// Check if environment variable is set
-	tempStr := os.Getenv("OPENROUTER_TEMPERATURE")
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TEMPERATURE"
+	} else {
+		envVar = "OPENROUTER_TEXT_TEMPERATURE"
+	}
+
+	// Get value from environment
+	tempStr := os.Getenv(envVar)
 	if tempStr != "" {
 		var temp float64
 		if _, err := fmt.Sscanf(tempStr, "%f", &temp); err == nil {
@@ -71,20 +80,22 @@ func GetTemperature(format string) *float64 {
 		}
 	}
 
-	// Format-aware defaults if no env var set
-	if format == "json" || format == "xml" {
-		temp := 0.3 // Lower temperature for structured outputs
-		return &temp
-	}
-
-	// Default for text conversations
-	temp := 0.7
-	return &temp
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
 }
 
 func GetTopP(format string) *float64 {
-	// Check if environment variable is set
-	topPStr := os.Getenv("OPENROUTER_TOP_P")
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TOP_P"
+	} else {
+		envVar = "OPENROUTER_TEXT_TOP_P"
+	}
+
+	// Get value from environment
+	topPStr := os.Getenv(envVar)
 	if topPStr != "" {
 		var topP float64
 		if _, err := fmt.Sscanf(topPStr, "%f", &topP); err == nil {
@@ -92,20 +103,22 @@ func GetTopP(format string) *float64 {
 		}
 	}
 
-	// Format-aware defaults if no env var set
-	if format == "json" || format == "xml" {
-		topP := 0.8 // Lower diversity for structured outputs
-		return &topP
-	}
-
-	// Default for text conversations
-	topP := 0.9
-	return &topP
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
 }
 
 func GetTopK(format string) *int {
-	// Check if environment variable is set
-	topKStr := os.Getenv("OPENROUTER_TOP_K")
+	var envVar string
+
+	// Determine which environment variable to use based on format
+	if format == "json" || format == "xml" {
+		envVar = "OPENROUTER_STRUCTURED_TOP_K"
+	} else {
+		envVar = "OPENROUTER_TEXT_TOP_K"
+	}
+
+	// Get value from environment
+	topKStr := os.Getenv(envVar)
 	if topKStr != "" {
 		var topK int
 		if _, err := fmt.Sscanf(topKStr, "%d", &topK); err == nil {
@@ -113,15 +126,8 @@ func GetTopK(format string) *int {
 		}
 	}
 
-	// Format-aware defaults if no env var set
-	if format == "json" || format == "xml" {
-		topK := 20 // Smaller token pool for structured outputs
-		return &topK
-	}
-
-	// Default for text conversations
-	topK := 40
-	return &topK
+	// Should not reach here if .env is configured, but return nil as fallback
+	return nil
 }
 
 func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
