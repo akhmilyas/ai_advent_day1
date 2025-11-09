@@ -311,11 +311,19 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           borderTopColor: colors.border,
         }}
       >
-        <input
-          type="text"
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
+          onKeyDown={(e) => {
+            // Submit on Enter, allow new line on Shift+Enter
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              if (!loading && input.trim()) {
+                handleSubmit(e as any);
+              }
+            }
+          }}
+          placeholder="Type your message... (Shift+Enter for new line)"
           style={{
             ...styles.input,
             backgroundColor: colors.input,
@@ -323,6 +331,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             borderColor: colors.border,
           }}
           disabled={loading}
+          rows={1}
         />
         <button
           type="submit"
@@ -436,6 +445,7 @@ const styles = {
   },
   inputContainer: {
     display: 'flex',
+    alignItems: 'flex-end',
     gap: '10px',
     padding: '20px',
     borderTop: '1px solid',
@@ -447,8 +457,14 @@ const styles = {
     padding: '12px',
     fontSize: '16px',
     borderRadius: '4px',
+    border: '1px solid',
     boxShadow: 'none !important',
     outline: 'none',
+    minHeight: '44px',
+    maxHeight: '200px',
+    resize: 'vertical',
+    fontFamily: 'inherit',
+    lineHeight: '1.5',
     transition: 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease',
   } as React.CSSProperties,
   sendButton: {
