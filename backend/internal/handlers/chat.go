@@ -117,8 +117,10 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Create new conversation with first message as title and specified format
 		title := req.Message
-		if len(title) > 100 {
-			title = title[:100]
+		// Use rune slicing to avoid cutting multi-byte UTF-8 characters
+		runes := []rune(title)
+		if len(runes) > 100 {
+			title = string(runes[:100])
 		}
 		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
 		if err != nil {
@@ -235,8 +237,10 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	} else {
 		// Create new conversation with first message as title and specified format
 		title := req.Message
-		if len(title) > 100 {
-			title = title[:100]
+		// Use rune slicing to avoid cutting multi-byte UTF-8 characters
+		runes := []rune(title)
+		if len(runes) > 100 {
+			title = string(runes[:100])
 		}
 		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
 		if err != nil {
