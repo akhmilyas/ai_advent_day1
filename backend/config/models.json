@@ -6,15 +6,15 @@
     "tier": "free"
   },
   {
-    "id": "mistralai/mistral-7b-instruct:free",
-    "name": "Mistral 7B Instruct (Free)",
-    "provider": "Mistral AI",
-    "tier": "free"
-  },
-  {
     "id": "z-ai/glm-4.5-air:free",
     "name": "GLM 4.5 Air (Free)",
     "provider": "Z-AI",
+    "tier": "free"
+  },
+  {
+    "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
+    "name": "Tongyi DeepResearch 30B (Free)",
+    "provider": "Alibaba",
     "tier": "free"
   },
   {
