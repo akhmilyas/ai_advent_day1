@@ -2,7 +2,7 @@
 
 A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter LLM API integration.
 
-**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **structured response formats (JSON/XML)** with visual rendering
+**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **structured response formats (JSON/XML)** with visual rendering
 
 ## Quick Start
 
@@ -53,10 +53,11 @@ OpenRouter LLM (External)
 - `GET /api/health` → OK
 
 ### Protected (require `Authorization: Bearer <token>`)
-- `POST /api/chat` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?}` → `{response, conversation_id, model}`
-- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?}` → SSE stream
+- `GET /api/models` → `{models: [{id, name, provider, tier}, ...]}`
+- `POST /api/chat` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?}` → `{response, conversation_id, model}`
+- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?}` → SSE stream
 - `GET /api/conversations` → `{conversations: [{id, title, response_format, response_schema, ...}, ...]}`
-- `GET /api/conversations/{id}/messages` → `{messages: [...]}`
+- `GET /api/conversations/{id}/messages` → `{messages: [{role, content, model, ...}, ...]}`
 - `DELETE /api/conversations/{id}` → `{success: boolean}`
 
 **CORS**: All endpoints support Cross-Origin requests from any origin (frontend can call backend from browser)
@@ -96,6 +97,8 @@ npm run build
 
 ## Configuration
 
+### Environment Variables
+
 Set environment variables in `.env`:
 
 ```bash
@@ -103,7 +106,6 @@ Set environment variables in `.env`:
 OPENROUTER_API_KEY=your_api_key
 
 # Optional LLM
-OPENROUTER_MODEL=meta-llama/llama-3.3-8b-instruct:free
 OPENROUTER_SYSTEM_PROMPT=You are a helpful assistant.
 
 # LLM Parameters - Format-Aware Configuration
@@ -126,20 +128,57 @@ DB_NAME=chatapp
 DB_SSLMODE=disable
 ```
 
+### Model Configuration
+
+Available models are configured in `backend/config/models.json`:
+
+```json
+[
+  {
+    "id": "meta-llama/llama-3.3-8b-instruct:free",
+    "name": "Llama 3.3 8B Instruct (Free)",
+    "provider": "Meta",
+    "tier": "free"
+  },
+  {
+    "id": "mistralai/mistral-7b-instruct:free",
+    "name": "Mistral 7B Instruct (Free)",
+    "provider": "Mistral AI",
+    "tier": "free"
+  },
+  {
+    "id": "z-ai/glm-4.5-air:free",
+    "name": "GLM 4.5 Air (Free)",
+    "provider": "Z-AI",
+    "tier": "free"
+  },
+  {
+    "id": "openrouter/polaris-alpha",
+    "name": "Polaris Alpha",
+    "provider": "OpenRouter",
+    "tier": "paid"
+  }
+]
+```
+
+**Note**: The first model in the configuration file is used as the default. Users can select a different model from the Settings UI.
+
 ## Usage
 
 1. **Register/Login**: Create account or use `demo/demo123`
 2. **Start New Chat**: Click sidebar or start typing
-3. **Choose Response Format** (before first message):
+3. **Select Model**: Click ⚙️ Settings to choose from available models (Llama 3.3, Mistral 7B, GLM 4.5 Air, Polaris Alpha)
+4. **Choose Response Format** (before first message):
    - **Plain Text**: Natural conversation with markdown rendering
    - **JSON**: Structured data with schema, displayed as hierarchical tree with raw view
    - **XML**: Structured markup with schema, displayed as hierarchical tree with raw view
-4. **Chat**: Type message → AI streams response in real-time
-5. **System Prompt** (text mode only): Click ⚙️ Settings to customize AI behavior
-6. **Schema** (JSON/XML only): Define structure in Settings before first message
-7. **Theme**: Toggle 🌙/☀️ button for dark/light mode
-8. **Conversations**: Auto-saved with format locked after first message
-9. **Logout**: Click logout button (all data persisted)
+5. **Chat**: Type message → AI streams response in real-time
+6. **System Prompt** (text mode only): Click ⚙️ Settings to customize AI behavior
+7. **Schema** (JSON/XML only): Define structure in Settings before first message
+8. **Theme**: Toggle 🌙/☀️ button for dark/light mode
+9. **Conversations**: Auto-saved with format locked after first message
+10. **Model Display**: Each AI response shows which model was used
+11. **Logout**: Click logout button (all data persisted)
 
 ## Tech Stack
 
@@ -153,6 +192,12 @@ DB_SSLMODE=disable
 
 - **Auth**: JWT tokens (24hr), bcrypt password hashing, user registration
 - **Chat**: SSE streaming, optimistic UI updates, full conversation history
+- **Model Selection**:
+  - Choose from multiple LLM models (configured via `backend/config/models.json`)
+  - Default model auto-selected from configuration
+  - Model preference saved to localStorage
+  - Per-message model tracking in database
+  - Model name displayed with each AI response
 - **Response Formats**:
   - **Text**: Markdown rendering with tables, lists, code blocks
   - **JSON**: Schema-based structured output, rendered as hierarchical tree supporting nested objects/arrays with raw view toggle
@@ -170,19 +215,21 @@ DB_SSLMODE=disable
 ```
 backend/
   cmd/server/main.go           # Entry point, routing
+  config/models.json           # Available LLM models configuration
   internal/auth/               # JWT, login, register
+  internal/config/             # Models configuration loader
   internal/db/                 # PostgreSQL layer (users, conversations, messages)
-  internal/handlers/           # HTTP handlers (chat, conversations)
+  internal/handlers/           # HTTP handlers (chat, conversations, models)
   internal/llm/                # OpenRouter integration, format-aware params
 frontend/
   src/components/
-    Chat.tsx                   # Main chat UI
+    Chat.tsx                   # Main chat UI, model selection
     Message.tsx                # Message rendering (text/JSON/XML)
-    SettingsModal.tsx          # Format/schema/prompt configuration
+    SettingsModal.tsx          # Format/schema/prompt/model configuration
     Sidebar.tsx                # Conversation list
   src/services/
     auth.ts                    # JWT token management
-    chat.ts                    # API calls, SSE parsing
+    chat.ts                    # API calls, SSE parsing, model fetching
   src/contexts/
     ThemeContext.tsx           # Dark/light theme
   src/themes.ts                # Color palettes

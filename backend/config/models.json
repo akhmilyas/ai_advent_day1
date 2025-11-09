@@ -1,0 +1,26 @@
+[
+  {
+    "id": "meta-llama/llama-3.3-8b-instruct:free",
+    "name": "Llama 3.3 8B Instruct (Free)",
+    "provider": "Meta",
+    "tier": "free"
+  },
+  {
+    "id": "mistralai/mistral-7b-instruct:free",
+    "name": "Mistral 7B Instruct (Free)",
+    "provider": "Mistral AI",
+    "tier": "free"
+  },
+  {
+    "id": "z-ai/glm-4.5-air:free",
+    "name": "GLM 4.5 Air (Free)",
+    "provider": "Z-AI",
+    "tier": "free"
+  },
+  {
+    "id": "openrouter/polaris-alpha",
+    "name": "Polaris Alpha",
+    "provider": "OpenRouter",
+    "tier": "paid"
+  }
+]

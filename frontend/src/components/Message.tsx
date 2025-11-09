@@ -7,6 +7,7 @@ import { ResponseFormat } from './SettingsModal';
 interface MessageProps {
   role: 'user' | 'assistant';
   content: string;
+  model?: string;
   conversationFormat: ResponseFormat | null;
   colors: ReturnType<typeof getTheme>;
 }
@@ -294,7 +295,7 @@ const renderXmlAsTree = (xmlString: string, colors: ReturnType<typeof getTheme>)
   }
 };
 
-export const Message: React.FC<MessageProps> = ({ role, content, conversationFormat, colors }) => {
+export const Message: React.FC<MessageProps> = ({ role, content, model, conversationFormat, colors }) => {
   const styles = getStyles(colors);
 
   return (
@@ -317,6 +318,11 @@ export const Message: React.FC<MessageProps> = ({ role, content, conversationFor
     >
       <div style={{ ...styles.messageRole, opacity: 0.7 }}>
         {role === 'user' ? 'You' : 'AI'}
+        {role === 'assistant' && model && (
+          <span style={{ fontSize: '11px', marginLeft: '8px', opacity: 0.6 }}>
+            ({model})
+          </span>
+        )}
       </div>
       <div style={role === 'assistant' ? styles.assistantContent : styles.messageContent}>
         {role === 'assistant' ? (

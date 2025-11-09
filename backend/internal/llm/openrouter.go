@@ -3,6 +3,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"chat-app/internal/config"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,12 +45,14 @@ func GetAPIKey() string {
 }
 
 func GetModel() string {
-	model := os.Getenv("OPENROUTER_MODEL")
-	if model == "" {
-		// Default to free LLaMA model
-		model = "meta-llama/llama-3.3-8b-instruct:free"
+	// Get the first model from config as default
+	models := config.GetAvailableModels()
+	if len(models) > 0 {
+		return models[0].ID
 	}
-	return model
+	// Fallback in case no models are configured (shouldn't happen)
+	log.Println("[LLM] Warning: No models configured, using fallback")
+	return "meta-llama/llama-3.3-8b-instruct:free"
 }
 
 func GetSystemPrompt() string {
@@ -141,13 +144,16 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message, customSystemPrompt string, format string) (string, error) {
+func ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
-	model := GetModel()
+	model := modelOverride
+	if model == "" {
+		model = GetModel()
+	}
 	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
@@ -201,13 +207,16 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string) (<-chan string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
-	model := GetModel()
+	model := modelOverride
+	if model == "" {
+		model = GetModel()
+	}
 	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, message history count: %d", model, format, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)

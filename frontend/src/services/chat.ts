@@ -24,7 +24,15 @@ export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  model?: string;
   created_at: string;
+}
+
+export interface Model {
+  id: string;
+  name: string;
+  provider: string;
+  tier: string;
 }
 
 export type OnChunkCallback = (chunk: string) => void;
@@ -40,7 +48,8 @@ export class ChatService {
     onModel?: OnModelCallback,
     systemPrompt?: string,
     responseFormat?: string,
-    responseSchema?: string
+    responseSchema?: string,
+    model?: string
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -54,6 +63,9 @@ export class ChatService {
     }
     if (responseSchema) {
       payload.response_schema = responseSchema;
+    }
+    if (model) {
+      payload.model = model;
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {
@@ -163,5 +175,21 @@ export class ChatService {
     if (!response.ok) {
       throw new Error('Failed to delete conversation');
     }
+  }
+
+  async getAvailableModels(): Promise<Model[]> {
+    const response = await fetch(`${API_URL}/api/models`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch available models');
+    }
+
+    const data = await response.json();
+    return data.models || [];
   }
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"chat-app/internal/auth"
+	"chat-app/internal/config"
 	"chat-app/internal/db"
 	"chat-app/internal/llm"
 	"encoding/json"
@@ -18,6 +19,7 @@ type ChatRequest struct {
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
 	ResponseFormat  string        `json:"response_format,omitempty"`
 	ResponseSchema  string        `json:"response_schema,omitempty"`
+	Model           string        `json:"model,omitempty"`
 }
 
 type ChatResponse struct {
@@ -44,6 +46,7 @@ type MessageData struct {
 	ID        string `json:"id"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
+	Model     string `json:"model,omitempty"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -54,6 +57,10 @@ type MessagesResponse struct {
 type DeleteResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+}
+
+type ModelsResponse struct {
+	Models []config.Model `json:"models"`
 }
 
 type ChatHandlers struct{}
@@ -121,8 +128,15 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add user message to database
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message); err != nil {
+	// Validate model if provided
+	model := req.Model
+	if model != "" && !config.IsValidModel(model) {
+		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+		return
+	}
+
+	// Add user message to database (user messages don't have a model)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, ""); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -139,7 +153,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Get response with full conversation history
-	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat)
+	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -152,8 +166,14 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] LLM response: %s", response)
 
-	// Add assistant response to database
-	if _, err := db.AddMessage(conversation.ID, "assistant", response); err != nil {
+	// Determine which model was actually used
+	usedModel := model
+	if usedModel == "" {
+		usedModel = llm.GetModel()
+	}
+
+	// Add assistant response to database with model
+	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
 		http.Error(w, "Error saving response", http.StatusInternalServerError)
 		return
@@ -226,8 +246,15 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Add user message to database
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message); err != nil {
+	// Validate model if provided
+	model := req.Model
+	if model != "" && !config.IsValidModel(model) {
+		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+		return
+	}
+
+	// Add user message to database (user messages don't have a model)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, ""); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -269,11 +296,17 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat)
+	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
 		return
+	}
+
+	// Determine which model was actually used
+	usedModel := model
+	if usedModel == "" {
+		usedModel = llm.GetModel()
 	}
 
 	// Send conversation ID as first event
@@ -282,10 +315,9 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	log.Printf("[CHAT] Sent conversation ID: %s", conversation.ID)
 
 	// Send model as second event
-	model := llm.GetModel()
-	fmt.Fprintf(w, "data: MODEL:%s\n\n", model)
+	fmt.Fprintf(w, "data: MODEL:%s\n\n", usedModel)
 	flusher.Flush()
-	log.Printf("[CHAT] Sent model: %s", model)
+	log.Printf("[CHAT] Sent model: %s", usedModel)
 
 	// Buffer to accumulate the full response
 	var fullResponse string
@@ -303,7 +335,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse); err != nil {
+		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}
 		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
@@ -402,6 +434,7 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 			ID:        msg.ID,
 			Role:      msg.Role,
 			Content:   msg.Content,
+			Model:     msg.Model,
 			CreatedAt: msg.CreatedAt.String(),
 		})
 	}
@@ -451,5 +484,20 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(DeleteResponse{
 		Success: true,
 		Message: "Conversation deleted successfully",
+	})
+}
+
+// GetModelsHandler returns the list of available models
+func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	models := config.GetAvailableModels()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ModelsResponse{
+		Models: models,
 	})
 }

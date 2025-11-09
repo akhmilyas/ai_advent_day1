@@ -1,11 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatService, Message as ChatMessage } from '../services/chat';
+import { ChatService } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 import { SettingsModal, ResponseFormat } from './SettingsModal';
 import { Sidebar } from './Sidebar';
 import { Message } from './Message';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  model?: string;
+}
 
 interface ChatProps {
   onLogout: () => void;
@@ -35,6 +41,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     const savedPrompt = localStorage.getItem('systemPrompt');
     const savedFormat = localStorage.getItem('responseFormat');
     const savedSchema = localStorage.getItem('responseSchema');
+    const savedModel = localStorage.getItem('selectedModel');
 
     if (savedPrompt) {
       setSystemPrompt(savedPrompt);
@@ -44,6 +51,23 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     }
     if (savedSchema) {
       setResponseSchema(savedSchema);
+    }
+    if (savedModel) {
+      setModel(savedModel);
+    } else {
+      // If no saved model, fetch and use the first model from config as default
+      const fetchDefaultModel = async () => {
+        try {
+          const models = await chatService.current.getAvailableModels();
+          if (models.length > 0) {
+            setModel(models[0].id);
+            localStorage.setItem('selectedModel', models[0].id);
+          }
+        } catch (error) {
+          console.error('[Chat] Failed to fetch default model:', error);
+        }
+      };
+      fetchDefaultModel();
     }
   }, []);
 
@@ -66,6 +90,11 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     localStorage.setItem('responseSchema', schema);
   };
 
+  const handleModelChange = (modelId: string) => {
+    setModel(modelId);
+    localStorage.setItem('selectedModel', modelId);
+  };
+
   const handleSelectConversation = async (convId: string, title: string) => {
     try {
       // Get conversation details to retrieve format and schema
@@ -86,6 +115,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         convMessages.map((msg) => ({
           role: msg.role,
           content: msg.content,
+          model: msg.model,
         }))
       );
     } catch (error) {
@@ -151,11 +181,23 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         (modelName) => {
           // Set model when received from server
           setModel(modelName);
+          // Update the last message (assistant) with the model
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                model: modelName,
+              };
+            }
+            return updated;
+          });
         },
         systemPrompt,
         // Only send format/schema for new conversations
         conversationId ? undefined : responseFormat,
-        conversationId ? undefined : responseSchema
+        conversationId ? undefined : responseSchema,
+        model || undefined
       );
       setLoading(false);
     } catch (error) {
@@ -252,6 +294,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             key={idx}
             role={msg.role}
             content={msg.content}
+            model={'model' in msg ? msg.model : undefined}
             conversationFormat={conversationFormat}
             colors={colors}
           />
@@ -307,6 +350,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           conversationFormat={conversationFormat}
           conversationSchema={conversationSchema}
           isExistingConversation={conversationId !== undefined}
+          selectedModel={model}
+          onModelChange={handleModelChange}
         />
       </div>
     </div>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"chat-app/internal/auth"
+	"chat-app/internal/config"
 	"chat-app/internal/db"
 	"chat-app/internal/handlers"
 	"log"
@@ -39,6 +40,14 @@ func main() {
 	}
 	defer db.CloseDB()
 
+	// Load models configuration
+	log.Printf("Loading models configuration...")
+	modelsPath := config.GetDefaultModelPath()
+	if err := config.LoadModels(modelsPath); err != nil {
+		log.Fatalf("Failed to load models configuration: %v", err)
+	}
+	log.Printf("Loaded %d models", len(config.GetAvailableModels()))
+
 	// Seed demo user
 	if err := db.SeedDemoUser(); err != nil {
 		log.Fatalf("Failed to seed demo user: %v", err)
@@ -68,6 +77,8 @@ func main() {
 		w.Write([]byte("OK"))
 	}))
 	mux.HandleFunc("OPTIONS /api/health", corsHandler)
+	mux.HandleFunc("GET /api/models", enableCORS(chatHandler.GetModelsHandler))
+	mux.HandleFunc("OPTIONS /api/models", corsHandler)
 
 	// Protected routes - use method-based routing (Go 1.22+ native)
 	mux.HandleFunc("POST /api/chat", enableCORS(auth.AuthMiddleware(chatHandler.ChatHandler)))

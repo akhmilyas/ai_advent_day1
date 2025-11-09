@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
+import { ChatService, Model } from '../services/chat';
 
 export type ResponseFormat = 'text' | 'json' | 'xml';
 
@@ -16,6 +17,8 @@ interface SettingsModalProps {
   conversationFormat?: ResponseFormat | null;
   conversationSchema?: string;
   isExistingConversation: boolean;
+  selectedModel: string;
+  onModelChange: (model: string) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -30,6 +33,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   conversationFormat,
   conversationSchema,
   isExistingConversation,
+  selectedModel,
+  onModelChange,
 }) => {
   // Initialize with the correct format from the start
   const initialFormat = conversationFormat || responseFormat;
@@ -38,14 +43,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [tempPrompt, setTempPrompt] = useState(systemPrompt);
   const [tempFormat, setTempFormat] = useState<ResponseFormat>(initialFormat);
   const [tempSchema, setTempSchema] = useState(initialSchema);
+  const [tempModel, setTempModel] = useState(selectedModel);
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
+  const chatService = new ChatService();
+
+  // Fetch available models on mount
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const models = await chatService.getAvailableModels();
+        setAvailableModels(models);
+      } catch (error) {
+        console.error('[SettingsModal] Failed to fetch models:', error);
+      }
+    };
+    fetchModels();
+  }, []);
 
   // Update state when modal opens or conversation changes
   React.useEffect(() => {
     console.log('[SettingsModal] useEffect triggered, isOpen:', isOpen, 'conversationFormat:', conversationFormat);
 
     setTempPrompt(systemPrompt);
+    setTempModel(selectedModel);
     // For existing conversations with a format, use the locked format
     // Otherwise use the user's preference from localStorage
     if (conversationFormat) {
@@ -61,7 +83,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else {
       setTempSchema(responseSchema);
     }
-  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema]);
+  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, selectedModel]);
 
   // For display, always use tempFormat (which is set from conversation or user preference)
   const displayFormat = tempFormat;
@@ -71,6 +93,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleSave = () => {
     onSystemPromptChange(tempPrompt);
+    onModelChange(tempModel);
     // Only save format changes if it's a new conversation
     if (!isExistingConversation) {
       onResponseFormatChange(tempFormat);
@@ -83,6 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTempPrompt(systemPrompt);
     setTempFormat(responseFormat);
     setTempSchema(responseSchema);
+    setTempModel(selectedModel);
     onClose();
   };
 
@@ -111,6 +135,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div style={styles.content}>
+          {/* Model Selector */}
+          <div style={styles.modelSection}>
+            <label style={styles.label}>
+              AI Model
+              <p style={styles.description}>
+                Select which AI model to use for generating responses.
+              </p>
+            </label>
+            <select
+              value={tempModel}
+              onChange={(e) => setTempModel(e.target.value)}
+              style={styles.select}
+            >
+              {availableModels.length === 0 && (
+                <option value="">Loading models...</option>
+              )}
+              {availableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} ({model.provider})
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Locked Configuration Info */}
           {isExistingConversation && (
             <div style={styles.infoBox}>
@@ -436,6 +484,21 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
   schemaSection: {
     marginTop: '16px',
     marginBottom: '16px',
+  },
+  modelSection: {
+    marginBottom: '20px',
+  },
+  select: {
+    width: '100%',
+    padding: '10px',
+    fontSize: '14px',
+    border: `1px solid ${colors.border}`,
+    borderRadius: '4px',
+    backgroundColor: colors.input,
+    color: colors.text,
+    cursor: 'pointer',
+    boxSizing: 'border-box' as const,
+    transition: 'background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease',
   },
   infoBox: {
     backgroundColor: colors.surfaceAlt,

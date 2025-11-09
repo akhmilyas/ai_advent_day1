@@ -160,5 +160,15 @@ func createTables() error {
 		return fmt.Errorf("error creating messages table: %w", err)
 	}
 
+	// Add model column if it doesn't exist
+	alterMessagesTableSQL := `
+	ALTER TABLE messages
+	ADD COLUMN IF NOT EXISTS model VARCHAR(255);
+	`
+
+	if _, err := db.Exec(alterMessagesTableSQL); err != nil {
+		return fmt.Errorf("error altering messages table: %w", err)
+	}
+
 	return nil
 }

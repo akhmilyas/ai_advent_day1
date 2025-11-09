@@ -26,6 +26,7 @@ type Message struct {
 	ConversationID string
 	Role           string
 	Content        string
+	Model          string
 	CreatedAt      time.Time
 }
 
@@ -114,19 +115,19 @@ func GetConversation(convID string) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func AddMessage(conversationID string, role, content string) (*Message, error) {
+func AddMessage(conversationID string, role, content, model string) (*Message, error) {
 	db := GetDB()
 
 	msgID := uuid.New().String()
 	var createdAt time.Time
 
 	query := `
-	INSERT INTO messages (id, conversation_id, role, content)
-	VALUES ($1, $2, $3, $4)
+	INSERT INTO messages (id, conversation_id, role, content, model)
+	VALUES ($1, $2, $3, $4, $5)
 	RETURNING id, created_at
 	`
 
-	err := db.QueryRow(query, msgID, conversationID, role, content).Scan(&msgID, &createdAt)
+	err := db.QueryRow(query, msgID, conversationID, role, content, model).Scan(&msgID, &createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("error adding message: %w", err)
 	}
@@ -137,13 +138,14 @@ func AddMessage(conversationID string, role, content string) (*Message, error) {
 		log.Printf("[DB] Warning: error updating conversation timestamp: %v", err)
 	}
 
-	log.Printf("[DB] Added message to conversation %s", conversationID)
+	log.Printf("[DB] Added message to conversation %s with model %s", conversationID, model)
 
 	return &Message{
 		ID:             msgID,
 		ConversationID: conversationID,
 		Role:           role,
 		Content:        content,
+		Model:          model,
 		CreatedAt:      createdAt,
 	}, nil
 }
@@ -185,7 +187,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 	db := GetDB()
 
 	query := `
-	SELECT id, conversation_id, role, content, created_at
+	SELECT id, conversation_id, role, content, COALESCE(model, ''), created_at
 	FROM messages
 	WHERE conversation_id = $1
 	ORDER BY created_at ASC
@@ -200,7 +202,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Model, &msg.CreatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning message: %w", err)
 		}
 		messages = append(messages, msg)
