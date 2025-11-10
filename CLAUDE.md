@@ -48,7 +48,7 @@ This is a fullstack chat application with three main layers:
 1. **Frontend (React/TypeScript)** on port 3000
    - Single-page app with login/register and chat interface
    - Connects to backend via HTTP REST (auth, models) and Server-Sent Events (chat streaming)
-   - Client-side state: authentication tokens, theme preference, custom system prompts, selected model
+   - Client-side state: authentication tokens, theme preference, custom system prompts, selected model, temperature
    - All stored in localStorage
 
 2. **Backend (Go)** on port 8080
@@ -70,7 +70,7 @@ User sends message
   ↓
 Frontend: ChatService.streamMessage()
   ↓
-POST /api/chat/stream {message, conversation_id?, system_prompt?, response_format?, response_schema?, model?}
+POST /api/chat/stream {message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}
   ↓
 Backend: ChatStreamHandler
   - Validates JWT token
@@ -80,26 +80,30 @@ Backend: ChatStreamHandler
   - Fetches full conversation history
   - Builds format-specific system prompt (JSON/XML get schema instructions)
   ↓
-Backend: llm.ChatWithHistoryStream(messages, systemPrompt, format, modelOverride)
+Backend: llm.ChatWithHistoryStream(messages, systemPrompt, format, modelOverride, temperature)
   - Uses provided model or defaults to first model in config
-  - Selects format-aware LLM parameters (temperature, top_p, top_k)
+  - Uses user-provided temperature (0.0-2.0)
+  - Selects format-aware top_p and top_k from environment variables
+  - Sets provider.require_parameters: true to ensure parameter support
   - Builds message array: [system_prompt, user1, assistant1, ..., user_n]
-  - Calls OpenRouter API with selected model and format-specific parameters
+  - Calls OpenRouter API with selected model, temperature, top_p, top_k, and provider config
   - Streams response via SSE format (data: {chunk}\n\n)
   - Sends model name via SSE (MODEL: model-name)
+  - Sends temperature via SSE (TEMPERATURE: 0.70)
   ↓
 Frontend: onChunk callback accumulates chunks
   - Unescape newlines (\\n → \n)
   - Update UI incrementally
   - Capture model name from MODEL: event
+  - Capture temperature from TEMPERATURE: event
   ↓
-Backend: Saves full response to DB after streaming completes (with model field)
+Backend: Saves full response to DB after streaming completes (with model and temperature fields)
   ↓
 Frontend: Message component renders based on format
   - text: ReactMarkdown
   - json: renderJsonAsTree() with collapsible raw view
   - xml: renderXmlAsTree() with collapsible raw view
-  - Shows model name next to "AI" label
+  - Shows model name and temperature next to "AI" label (e.g., "AI (model-name, temp: 0.70)")
 ```
 
 ### Authentication Flow
@@ -131,12 +135,17 @@ Frontend: Message component renders based on format
   - XML: Hierarchical tree structure with syntax highlighting + collapsible raw XML view
 
 ### LLM Parameter Management
-- **Format-aware parameters**: Different params for text vs structured formats
-- **Environment-based configuration**:
-  - `OPENROUTER_TEXT_TEMPERATURE/TOP_P/TOP_K` for text conversations (0.7/0.9/40)
-  - `OPENROUTER_STRUCTURED_TEMPERATURE/TOP_P/TOP_K` for JSON/XML (0.3/0.8/20)
-- **No hardcoded constants**: All values come from environment variables
-- **Automatic selection**: Backend chooses params based on conversation.ResponseFormat from DB
+- **Temperature Control**: User-adjustable via Settings UI (0.0-2.0 slider, default 0.7)
+  - Temperature sent with every request to OpenRouter API
+  - Saved with each message in database
+  - Displayed alongside model name in message UI
+  - Preference persisted in localStorage
+- **Format-aware parameters**: Different top_p/top_k for text vs structured formats
+- **Environment-based configuration** (top_p and top_k only):
+  - `OPENROUTER_TEXT_TOP_P/TOP_K` for text conversations (0.9/40)
+  - `OPENROUTER_STRUCTURED_TOP_P/TOP_K` for JSON/XML (0.8/20)
+- **Provider routing**: `require_parameters: true` ensures OpenRouter routes to providers that support all parameters
+- **Automatic selection**: Backend chooses top_p/top_k based on conversation.ResponseFormat from DB
 
 ### Model Selection System
 - **Configuration-based**: Available models defined in `backend/config/models.json`
@@ -152,10 +161,12 @@ Frontend: Message component renders based on format
 - **API override**: Optional `model` parameter in chat requests overrides default
 
 **Current Models** (as of config):
-1. `meta-llama/llama-3.3-8b-instruct:free` - Llama 3.3 8B (Meta, free)
-2. `mistralai/mistral-7b-instruct:free` - Mistral 7B (Mistral AI, free)
-3. `z-ai/glm-4.5-air:free` - GLM 4.5 Air (Z-AI, free)
-4. `openrouter/polaris-alpha` - Polaris Alpha (OpenRouter, paid)
+1. `meta-llama/llama-3.3-8b-instruct:free` - Llama 3.3 8B (Meta, free) - **DEFAULT**
+2. `google/gemini-2.5-flash` - Gemini 2.5 Flash (Google, paid)
+3. `openai/gpt-5-mini` - GPT-5 Mini (OpenAI, paid)
+4. `z-ai/glm-4.5-air:free` - GLM 4.5 Air (Z-AI, free)
+5. `alibaba/tongyi-deepresearch-30b-a3b:free` - Tongyi DeepResearch 30B (Alibaba, free)
+6. `openrouter/polaris-alpha` - Polaris Alpha (OpenRouter, paid)
 
 **Implementation Flow**:
 ```
@@ -186,10 +197,10 @@ Backend saves to DB: messages.model column
 - History retrieved in chronological order from DB
 
 ### Frontend State Management
-- Minimal React state: messages, input, loading, conversationId, model, systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, theme, settingsOpen
+- Minimal React state: messages, input, loading, conversationId, model, temperature, systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, theme, settingsOpen
 - No Redux/complex state library; useContext for theme, useState for component local state
-- localStorage for persistence: auth_token, theme, systemPrompt, responseFormat, responseSchema, selectedModel
-- Component separation: Message.tsx handles format-specific rendering, SettingsModal.tsx handles model selection
+- localStorage for persistence: auth_token, theme, systemPrompt, responseFormat, responseSchema, selectedModel, temperature
+- Component separation: Message.tsx handles format-specific rendering and displays model/temperature, SettingsModal.tsx handles model selection and temperature slider
 
 ### UUID for All IDs
 - All database IDs use PostgreSQL UUID type (Universally Unique Identifiers)
@@ -220,6 +231,7 @@ messages (
   role VARCHAR,
   content TEXT,
   model VARCHAR(255),                            -- LLM model used for assistant responses
+  temperature REAL,                              -- Temperature used for generating response (0.0-2.0)
   created_at TIMESTAMP
 )
 ```
@@ -230,6 +242,7 @@ messages (
 - **response_format** column locks format after first message (cannot be changed)
 - **response_schema** stores JSON/XML schema definition for validation
 - **model** column tracks which LLM model generated each assistant response
+- **temperature** column tracks temperature setting (0.0-2.0) used for each response
 - Messages store role ('user' or 'assistant') for history reconstruction
 - Cascade deletes prevent orphaned records
 - Indexes on user_id and conversation_id for query performance
@@ -245,11 +258,9 @@ messages (
 
 **Optional (with defaults):**
 - `OPENROUTER_SYSTEM_PROMPT` - Default system prompt (default: "You are a helpful assistant.")
-- **Format-Aware LLM Parameters**:
-  - `OPENROUTER_TEXT_TEMPERATURE` - Temperature for text conversations (default: 0.7)
+- **Format-Aware LLM Parameters** (temperature is now user-controlled via Settings UI):
   - `OPENROUTER_TEXT_TOP_P` - Top-P for text conversations (default: 0.9)
   - `OPENROUTER_TEXT_TOP_K` - Top-K for text conversations (default: 40)
-  - `OPENROUTER_STRUCTURED_TEMPERATURE` - Temperature for JSON/XML (default: 0.3)
   - `OPENROUTER_STRUCTURED_TOP_P` - Top-P for JSON/XML (default: 0.8)
   - `OPENROUTER_STRUCTURED_TOP_K` - Top-K for JSON/XML (default: 20)
 - `DB_HOST` - PostgreSQL host (default: postgres in Docker, localhost locally)
@@ -514,6 +525,7 @@ data: [DONE]
 **Metadata Events** (SSE with prefixes):
 - `CONV_ID:uuid-string` - Conversation ID for new conversations
 - `MODEL:model-name` - Model used for generating response
+- `TEMPERATURE:0.70` - Temperature used for generating response
 
 Parsed by frontend: unescape newlines, collect chunks, capture metadata, skip [DONE]
 
@@ -599,11 +611,13 @@ chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, 
 
 **LLM Parameter Selection:**
 ```go
-func GetTemperature(format string) *float64 {
+// Temperature is now user-provided via Settings UI (0.0-2.0)
+// Top-P and Top-K still from environment variables
+func GetTopP(format string) *float64 {
   if format == "json" || format == "xml" {
-    return os.Getenv("OPENROUTER_STRUCTURED_TEMPERATURE")  // 0.3
+    return os.Getenv("OPENROUTER_STRUCTURED_TOP_P")  // 0.8
   }
-  return os.Getenv("OPENROUTER_TEXT_TEMPERATURE")  // 0.7
+  return os.Getenv("OPENROUTER_TEXT_TOP_P")  // 0.9
 }
 ```
 

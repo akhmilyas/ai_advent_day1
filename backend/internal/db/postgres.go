@@ -170,5 +170,15 @@ func createTables() error {
 		return fmt.Errorf("error altering messages table: %w", err)
 	}
 
+	// Add temperature column if it doesn't exist
+	alterMessagesTemperatureSQL := `
+	ALTER TABLE messages
+	ADD COLUMN IF NOT EXISTS temperature REAL;
+	`
+
+	if _, err := db.Exec(alterMessagesTemperatureSQL); err != nil {
+		return fmt.Errorf("error altering messages table for temperature: %w", err)
+	}
+
 	return nil
 }

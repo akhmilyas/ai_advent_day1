@@ -8,6 +8,7 @@ interface MessageProps {
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  temperature?: number;
   conversationFormat: ResponseFormat | null;
   colors: ReturnType<typeof getTheme>;
 }
@@ -295,7 +296,7 @@ const renderXmlAsTree = (xmlString: string, colors: ReturnType<typeof getTheme>)
   }
 };
 
-export const Message: React.FC<MessageProps> = ({ role, content, model, conversationFormat, colors }) => {
+export const Message: React.FC<MessageProps> = ({ role, content, model, temperature, conversationFormat, colors }) => {
   const styles = getStyles(colors);
 
   return (
@@ -318,9 +319,9 @@ export const Message: React.FC<MessageProps> = ({ role, content, model, conversa
     >
       <div style={{ ...styles.messageRole, opacity: 0.7 }}>
         {role === 'user' ? 'You' : 'AI'}
-        {role === 'assistant' && model && (
+        {role === 'assistant' && (model || temperature !== undefined) && (
           <span style={{ fontSize: '11px', marginLeft: '8px', opacity: 0.6 }}>
-            ({model})
+            ({model && <>{model}</>}{model && temperature !== undefined && ', '}{temperature !== undefined && <>temp: {temperature.toFixed(2)}</>})
           </span>
         )}
       </div>

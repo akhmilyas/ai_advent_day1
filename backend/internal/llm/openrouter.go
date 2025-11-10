@@ -20,6 +20,10 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type Provider struct {
+	RequireParameters bool `json:"require_parameters,omitempty"`
+}
+
 type ChatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -27,6 +31,7 @@ type ChatRequest struct {
 	Temperature *float64  `json:"temperature,omitempty"`
 	TopP        *float64  `json:"top_p,omitempty"`
 	TopK        *int      `json:"top_k,omitempty"`
+	Provider    *Provider `json:"provider,omitempty"`
 }
 
 type ChatResponse struct {
@@ -62,29 +67,6 @@ func GetSystemPrompt() string {
 		systemPrompt = "You are a helpful assistant."
 	}
 	return systemPrompt
-}
-
-func GetTemperature(format string) *float64 {
-	var envVar string
-
-	// Determine which environment variable to use based on format
-	if format == "json" || format == "xml" {
-		envVar = "OPENROUTER_STRUCTURED_TEMPERATURE"
-	} else {
-		envVar = "OPENROUTER_TEXT_TEMPERATURE"
-	}
-
-	// Get value from environment
-	tempStr := os.Getenv(envVar)
-	if tempStr != "" {
-		var temp float64
-		if _, err := fmt.Sscanf(tempStr, "%f", &temp); err == nil {
-			return &temp
-		}
-	}
-
-	// Should not reach here if .env is configured, but return nil as fallback
-	return nil
 }
 
 func GetTopP(format string) *float64 {
@@ -144,7 +126,7 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string) (string, error) {
+func ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -154,7 +136,12 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 	if model == "" {
 		model = GetModel()
 	}
-	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, message history count: %d", model, format, len(messages))
+
+	tempStr := "nil"
+	if temperature != nil {
+		tempStr = fmt.Sprintf("%.2f", *temperature)
+	}
+	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
@@ -162,9 +149,12 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      false,
-		Temperature: GetTemperature(format),
+		Temperature: temperature,
 		TopP:        GetTopP(format),
 		TopK:        GetTopK(format),
+		Provider: &Provider{
+			RequireParameters: true,
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -207,7 +197,7 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -217,7 +207,12 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 	if model == "" {
 		model = GetModel()
 	}
-	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, message history count: %d", model, format, len(messages))
+
+	tempStr := "nil"
+	if temperature != nil {
+		tempStr = fmt.Sprintf("%.2f", *temperature)
+	}
+	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
 
 	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
 
@@ -225,9 +220,12 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      true,
-		Temperature: GetTemperature(format),
+		Temperature: temperature,
 		TopP:        GetTopP(format),
 		TopK:        GetTopK(format),
+		Provider: &Provider{
+			RequireParameters: true,
+		},
 	}
 
 	jsonData, err := json.Marshal(reqBody)
