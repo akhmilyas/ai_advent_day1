@@ -25,6 +25,7 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  temperature?: number;
   created_at: string;
 }
 
@@ -38,6 +39,7 @@ export interface Model {
 export type OnChunkCallback = (chunk: string) => void;
 export type OnConversationCallback = (conversationId: string) => void;
 export type OnModelCallback = (model: string) => void;
+export type OnTemperatureCallback = (temperature: number) => void;
 
 export class ChatService {
   async streamMessage(
@@ -49,7 +51,9 @@ export class ChatService {
     systemPrompt?: string,
     responseFormat?: string,
     responseSchema?: string,
-    model?: string
+    model?: string,
+    temperature?: number,
+    onTemperature?: OnTemperatureCallback
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -66,6 +70,9 @@ export class ChatService {
     }
     if (model) {
       payload.model = model;
+    }
+    if (temperature !== undefined) {
+      payload.temperature = temperature;
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {
@@ -113,6 +120,13 @@ export class ChatService {
               const model = content.slice(6);
               if (model && onModel) {
                 onModel(model);
+              }
+            }
+            // Check for temperature metadata
+            else if (content.startsWith('TEMPERATURE:')) {
+              const temp = parseFloat(content.slice(12));
+              if (!isNaN(temp) && onTemperature) {
+                onTemperature(temp);
               }
             }
             // Skip [DONE] and empty events

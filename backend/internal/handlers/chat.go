@@ -20,6 +20,7 @@ type ChatRequest struct {
 	ResponseFormat  string        `json:"response_format,omitempty"`
 	ResponseSchema  string        `json:"response_schema,omitempty"`
 	Model           string        `json:"model,omitempty"`
+	Temperature     *float64      `json:"temperature,omitempty"`
 }
 
 type ChatResponse struct {
@@ -43,11 +44,12 @@ type ConversationsResponse struct {
 }
 
 type MessageData struct {
-	ID        string `json:"id"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Model     string `json:"model,omitempty"`
-	CreatedAt string `json:"created_at"`
+	ID          string   `json:"id"`
+	Role        string   `json:"role"`
+	Content     string   `json:"content"`
+	Model       string   `json:"model,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	CreatedAt   string   `json:"created_at"`
 }
 
 type MessagesResponse struct {
@@ -137,8 +139,8 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add user message to database (user messages don't have a model)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, ""); err != nil {
+	// Add user message to database (user messages don't have a model or temperature)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -155,7 +157,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
 	// Get response with full conversation history
-	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model)
+	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -174,8 +176,8 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		usedModel = llm.GetModel()
 	}
 
-	// Add assistant response to database with model
-	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel); err != nil {
+	// Add assistant response to database with model and temperature
+	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
 		http.Error(w, "Error saving response", http.StatusInternalServerError)
 		return
@@ -257,8 +259,8 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Add user message to database (user messages don't have a model)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, ""); err != nil {
+	// Add user message to database (user messages don't have a model or temperature)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -300,7 +302,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model)
+	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
@@ -323,6 +325,13 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	flusher.Flush()
 	log.Printf("[CHAT] Sent model: %s", usedModel)
 
+	// Send temperature as third event
+	if req.Temperature != nil {
+		fmt.Fprintf(w, "data: TEMPERATURE:%.2f\n\n", *req.Temperature)
+		flusher.Flush()
+		log.Printf("[CHAT] Sent temperature: %.2f", *req.Temperature)
+	}
+
 	// Buffer to accumulate the full response
 	var fullResponse string
 
@@ -339,7 +348,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel); err != nil {
+		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}
 		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
@@ -435,11 +444,12 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	msgData := make([]MessageData, 0, len(messages))
 	for _, msg := range messages {
 		msgData = append(msgData, MessageData{
-			ID:        msg.ID,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Model:     msg.Model,
-			CreatedAt: msg.CreatedAt.String(),
+			ID:          msg.ID,
+			Role:        msg.Role,
+			Content:     msg.Content,
+			Model:       msg.Model,
+			Temperature: msg.Temperature,
+			CreatedAt:   msg.CreatedAt.String(),
 		})
 	}
 

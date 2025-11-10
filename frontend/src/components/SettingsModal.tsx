@@ -19,6 +19,8 @@ interface SettingsModalProps {
   isExistingConversation: boolean;
   selectedModel: string;
   onModelChange: (model: string) => void;
+  temperature: number;
+  onTemperatureChange: (temperature: number) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -35,6 +37,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isExistingConversation,
   selectedModel,
   onModelChange,
+  temperature,
+  onTemperatureChange,
 }) => {
   // Initialize with the correct format from the start
   const initialFormat = conversationFormat || responseFormat;
@@ -44,6 +48,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [tempFormat, setTempFormat] = useState<ResponseFormat>(initialFormat);
   const [tempSchema, setTempSchema] = useState(initialSchema);
   const [tempModel, setTempModel] = useState(selectedModel);
+  const [tempTemperature, setTempTemperature] = useState(temperature);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
@@ -68,6 +73,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     setTempPrompt(systemPrompt);
     setTempModel(selectedModel);
+    setTempTemperature(temperature);
     // For existing conversations with a format, use the locked format
     // Otherwise use the user's preference from localStorage
     if (conversationFormat) {
@@ -83,7 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else {
       setTempSchema(responseSchema);
     }
-  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, selectedModel]);
+  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, selectedModel, temperature]);
 
   // For display, always use tempFormat (which is set from conversation or user preference)
   const displayFormat = tempFormat;
@@ -94,6 +100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSave = () => {
     onSystemPromptChange(tempPrompt);
     onModelChange(tempModel);
+    onTemperatureChange(tempTemperature);
     // Only save format changes if it's a new conversation
     if (!isExistingConversation) {
       onResponseFormatChange(tempFormat);
@@ -107,6 +114,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTempFormat(responseFormat);
     setTempSchema(responseSchema);
     setTempModel(selectedModel);
+    setTempTemperature(temperature);
     onClose();
   };
 
@@ -157,6 +165,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Temperature Slider */}
+          <div style={styles.temperatureSection}>
+            <label style={styles.label}>
+              Temperature: {tempTemperature.toFixed(2)}
+              <p style={styles.description}>
+                Controls randomness: Lower values (0.0-0.5) = more focused and deterministic, Higher values (0.5-2.0) = more creative and random.
+              </p>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={tempTemperature}
+              onChange={(e) => setTempTemperature(parseFloat(e.target.value))}
+              style={styles.slider}
+            />
+            <div style={styles.sliderLabels}>
+              <span style={styles.sliderLabel}>0.0 (Focused)</span>
+              <span style={styles.sliderLabel}>1.0 (Balanced)</span>
+              <span style={styles.sliderLabel}>2.0 (Creative)</span>
+            </div>
           </div>
 
           {/* Locked Configuration Info */}
@@ -538,5 +570,26 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
     maxHeight: '200px',
     overflowY: 'auto' as const,
     lineHeight: '1.4',
+  },
+  temperatureSection: {
+    marginBottom: '20px',
+  },
+  slider: {
+    width: '100%',
+    height: '6px',
+    borderRadius: '3px',
+    outline: 'none',
+    cursor: 'pointer',
+    marginBottom: '8px',
+    accentColor: colors.buttonPrimary,
+  },
+  sliderLabels: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    paddingTop: '4px',
+  },
+  sliderLabel: {
+    fontSize: '11px',
+    color: colors.textSecondary,
   },
 });

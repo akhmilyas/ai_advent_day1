@@ -11,6 +11,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  temperature?: number;
 }
 
 interface ChatProps {
@@ -31,6 +32,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [responseSchema, setResponseSchema] = useState<string>('');
   const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
   const [conversationSchema, setConversationSchema] = useState<string>('');
+  const [temperature, setTemperature] = useState<number>(0.7);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -42,6 +44,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     const savedFormat = localStorage.getItem('responseFormat');
     const savedSchema = localStorage.getItem('responseSchema');
     const savedModel = localStorage.getItem('selectedModel');
+    const savedTemperature = localStorage.getItem('temperature');
 
     if (savedPrompt) {
       setSystemPrompt(savedPrompt);
@@ -69,6 +72,12 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       };
       fetchDefaultModel();
     }
+    if (savedTemperature) {
+      const temp = parseFloat(savedTemperature);
+      if (!isNaN(temp)) {
+        setTemperature(temp);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -95,6 +104,11 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     localStorage.setItem('selectedModel', modelId);
   };
 
+  const handleTemperatureChange = (temp: number) => {
+    setTemperature(temp);
+    localStorage.setItem('temperature', temp.toString());
+  };
+
   const handleSelectConversation = async (convId: string, title: string) => {
     try {
       // Get conversation details to retrieve format and schema
@@ -116,6 +130,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           role: msg.role,
           content: msg.content,
           model: msg.model,
+          temperature: msg.temperature,
         }))
       );
     } catch (error) {
@@ -197,7 +212,21 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         // Only send format/schema for new conversations
         conversationId ? undefined : responseFormat,
         conversationId ? undefined : responseSchema,
-        model || undefined
+        model || undefined,
+        temperature,
+        (temp) => {
+          // Update the last message (assistant) with the temperature
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                temperature: temp,
+              };
+            }
+            return updated;
+          });
+        }
       );
       setLoading(false);
     } catch (error) {
@@ -295,6 +324,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             role={msg.role}
             content={msg.content}
             model={'model' in msg ? msg.model : undefined}
+            temperature={'temperature' in msg ? msg.temperature : undefined}
             conversationFormat={conversationFormat}
             colors={colors}
           />
@@ -361,6 +391,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           isExistingConversation={conversationId !== undefined}
           selectedModel={model}
           onModelChange={handleModelChange}
+          temperature={temperature}
+          onTemperatureChange={handleTemperatureChange}
         />
       </div>
     </div>
