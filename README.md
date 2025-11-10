@@ -2,7 +2,7 @@
 
 A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter LLM API integration.
 
-**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **structured response formats (JSON/XML)** with visual rendering
+**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **temperature control**, **structured response formats (JSON/XML)** with visual rendering
 
 ## Quick Start
 
@@ -54,10 +54,10 @@ OpenRouter LLM (External)
 
 ### Protected (require `Authorization: Bearer <token>`)
 - `GET /api/models` → `{models: [{id, name, provider, tier}, ...]}`
-- `POST /api/chat` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?}` → `{response, conversation_id, model}`
-- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?}` → SSE stream
+- `POST /api/chat` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}` → `{response, conversation_id, model}`
+- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}` → SSE stream
 - `GET /api/conversations` → `{conversations: [{id, title, response_format, response_schema, ...}, ...]}`
-- `GET /api/conversations/{id}/messages` → `{messages: [{role, content, model, ...}, ...]}`
+- `GET /api/conversations/{id}/messages` → `{messages: [{role, content, model, temperature, ...}, ...]}`
 - `DELETE /api/conversations/{id}` → `{success: boolean}`
 
 **CORS**: All endpoints support Cross-Origin requests from any origin (frontend can call backend from browser)
@@ -109,13 +109,12 @@ OPENROUTER_API_KEY=your_api_key
 OPENROUTER_SYSTEM_PROMPT=You are a helpful assistant.
 
 # LLM Parameters - Format-Aware Configuration
-# Parameters for plain text conversations (more creative)
-OPENROUTER_TEXT_TEMPERATURE=0.7
+# Note: Temperature is now user-controlled via Settings UI (0.0-2.0 slider)
+# Parameters for plain text conversations
 OPENROUTER_TEXT_TOP_P=0.9
 OPENROUTER_TEXT_TOP_K=40
 
 # Parameters for structured formats: JSON/XML (more deterministic)
-OPENROUTER_STRUCTURED_TEMPERATURE=0.3
 OPENROUTER_STRUCTURED_TOP_P=0.8
 OPENROUTER_STRUCTURED_TOP_K=20
 
@@ -141,15 +140,27 @@ Available models are configured in `backend/config/models.json`:
     "tier": "free"
   },
   {
-    "id": "mistralai/mistral-7b-instruct:free",
-    "name": "Mistral 7B Instruct (Free)",
-    "provider": "Mistral AI",
-    "tier": "free"
+    "id": "google/gemini-2.5-flash",
+    "name": "Gemini 2.5 Flash",
+    "provider": "Google",
+    "tier": "paid"
+  },
+  {
+    "id": "openai/gpt-5-mini",
+    "name": "GPT-5 Mini",
+    "provider": "OpenAI",
+    "tier": "paid"
   },
   {
     "id": "z-ai/glm-4.5-air:free",
     "name": "GLM 4.5 Air (Free)",
     "provider": "Z-AI",
+    "tier": "free"
+  },
+  {
+    "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
+    "name": "Tongyi DeepResearch 30B (Free)",
+    "provider": "Alibaba",
     "tier": "free"
   },
   {
@@ -167,18 +178,23 @@ Available models are configured in `backend/config/models.json`:
 
 1. **Register/Login**: Create account or use `demo/demo123`
 2. **Start New Chat**: Click sidebar or start typing
-3. **Select Model**: Click ⚙️ Settings to choose from available models (Llama 3.3, Mistral 7B, GLM 4.5 Air, Polaris Alpha)
-4. **Choose Response Format** (before first message):
-   - **Plain Text**: Natural conversation with markdown rendering
-   - **JSON**: Structured data with schema, displayed as hierarchical tree with raw view
-   - **XML**: Structured markup with schema, displayed as hierarchical tree with raw view
-5. **Chat**: Type message → AI streams response in real-time
-6. **System Prompt** (text mode only): Click ⚙️ Settings to customize AI behavior
-7. **Schema** (JSON/XML only): Define structure in Settings before first message
-8. **Theme**: Toggle 🌙/☀️ button for dark/light mode
-9. **Conversations**: Auto-saved with format locked after first message
-10. **Model Display**: Each AI response shows which model was used
-11. **Logout**: Click logout button (all data persisted)
+3. **Configure Settings** (⚙️):
+   - **Select Model**: Choose from available models (Llama 3.3, Gemini 2.5 Flash, GPT-5 Mini, GLM 4.5 Air, Tongyi DeepResearch, Polaris Alpha)
+   - **Temperature**: Adjust creativity (0.0-2.0 slider, default 0.7)
+     - 0.0-0.5: Focused and deterministic
+     - 0.5-1.0: Balanced
+     - 1.0-2.0: Creative and random
+   - **Response Format** (before first message):
+     - **Plain Text**: Natural conversation with markdown rendering
+     - **JSON**: Structured data with schema, displayed as hierarchical tree with raw view
+     - **XML**: Structured markup with schema, displayed as hierarchical tree with raw view
+   - **System Prompt** (text mode only): Customize AI behavior
+   - **Schema** (JSON/XML only): Define structure before first message
+4. **Chat**: Type message → AI streams response in real-time
+5. **Theme**: Toggle 🌙/☀️ button for dark/light mode
+6. **Conversations**: Auto-saved with format locked after first message
+7. **Model & Temperature Display**: Each AI response shows which model and temperature were used
+8. **Logout**: Click logout button (all data persisted)
 
 ## Tech Stack
 
@@ -194,20 +210,29 @@ Available models are configured in `backend/config/models.json`:
 - **Chat**: SSE streaming, optimistic UI updates, full conversation history
 - **Model Selection**:
   - Choose from multiple LLM models (configured via `backend/config/models.json`)
+  - Current models: Llama 3.3 8B (free), Gemini 2.5 Flash, GPT-5 Mini, GLM 4.5 Air, Tongyi DeepResearch, Polaris Alpha
   - Default model auto-selected from configuration
   - Model preference saved to localStorage
   - Per-message model tracking in database
   - Model name displayed with each AI response
+- **Temperature Control**:
+  - User-adjustable temperature slider (0.0-2.0, step 0.01)
+  - Default: 0.7 (balanced)
+  - Per-request temperature sent to OpenRouter API
+  - Temperature saved with each message in database
+  - Temperature displayed with each AI response
+  - Preference persisted in localStorage
 - **Response Formats**:
   - **Text**: Markdown rendering with tables, lists, code blocks
   - **JSON**: Schema-based structured output, rendered as hierarchical tree supporting nested objects/arrays with raw view toggle
   - **XML**: Schema-based structured output, rendered as hierarchical tree with syntax highlighting and raw view toggle
-- **Format-Aware LLM Parameters**: Different temperature/top-p/top-k for text vs structured formats
+- **Format-Aware LLM Parameters**: Different top-p/top-k for text vs structured formats
+- **OpenRouter Provider Routing**: `require_parameters: true` ensures all parameters are supported by selected provider
 - **System Prompts**: Custom prompts for text conversations (stored in localStorage)
 - **Schema Validation**: Define JSON/XML schemas for structured responses
 - **Visual Rendering**: Hierarchical tree structures for both JSON and XML with unlimited nesting support
 - **Format Locking**: Response format cannot be changed after conversation starts
-- **Database**: PostgreSQL persistence with format/schema stored per conversation
+- **Database**: PostgreSQL persistence with format/schema/temperature stored per conversation/message
 - **Security**: JWT validation, CORS, API key management
 
 ## Project Structure
