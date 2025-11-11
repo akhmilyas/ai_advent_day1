@@ -34,5 +34,17 @@
     "name": "Claude Sonnet 4.5",
     "provider": "Anthropic",
     "tier": "paid"
+  },
+  {
+    "id": "liquid/lfm-2.2-6b",
+    "name": "LFM 2.2 6B",
+    "provider": "Liquid",
+    "tier": "paid"
+  },
+  {
+    "id": "openai/gpt-oss-120b",
+    "name": "GPT OSS 120B",
+    "provider": "OpenAI",
+    "tier": "paid"
   }
 ]
