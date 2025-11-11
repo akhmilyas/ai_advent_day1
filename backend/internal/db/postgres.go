@@ -180,5 +180,21 @@ func createTables() error {
 		return fmt.Errorf("error altering messages table for temperature: %w", err)
 	}
 
+	// Add usage tracking columns if they don't exist
+	alterMessagesUsageSQL := `
+	ALTER TABLE messages
+	ADD COLUMN IF NOT EXISTS generation_id VARCHAR(255),
+	ADD COLUMN IF NOT EXISTS prompt_tokens INTEGER,
+	ADD COLUMN IF NOT EXISTS completion_tokens INTEGER,
+	ADD COLUMN IF NOT EXISTS total_tokens INTEGER,
+	ADD COLUMN IF NOT EXISTS total_cost REAL,
+	ADD COLUMN IF NOT EXISTS latency INTEGER,
+	ADD COLUMN IF NOT EXISTS generation_time INTEGER;
+	`
+
+	if _, err := db.Exec(alterMessagesUsageSQL); err != nil {
+		return fmt.Errorf("error altering messages table for usage tracking: %w", err)
+	}
+
 	return nil
 }

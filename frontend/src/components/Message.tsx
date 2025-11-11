@@ -9,6 +9,12 @@ interface MessageProps {
   content: string;
   model?: string;
   temperature?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  totalCost?: number;
+  latency?: number;
+  generationTime?: number;
   conversationFormat: ResponseFormat | null;
   colors: ReturnType<typeof getTheme>;
 }
@@ -296,7 +302,7 @@ const renderXmlAsTree = (xmlString: string, colors: ReturnType<typeof getTheme>)
   }
 };
 
-export const Message: React.FC<MessageProps> = ({ role, content, model, temperature, conversationFormat, colors }) => {
+export const Message: React.FC<MessageProps> = ({ role, content, model, temperature, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime, conversationFormat, colors }) => {
   const styles = getStyles(colors);
 
   return (
@@ -360,6 +366,36 @@ export const Message: React.FC<MessageProps> = ({ role, content, model, temperat
           content
         )}
       </div>
+      {role === 'assistant' && (totalTokens !== undefined || totalCost !== undefined || latency !== undefined || generationTime !== undefined) && (
+        <div style={{ fontSize: '10px', marginTop: '8px', opacity: 0.5, fontFamily: 'monospace', borderTop: `1px solid ${colors.border}`, paddingTop: '8px' }}>
+          {totalTokens !== undefined && (
+            <>
+              Tokens: {totalTokens}
+              {promptTokens !== undefined && completionTokens !== undefined && (
+                <> (prompt: {promptTokens}, completion: {completionTokens})</>
+              )}
+            </>
+          )}
+          {totalCost !== undefined && (
+            <>
+              {totalTokens !== undefined && ' | '}
+              Cost: ${totalCost.toFixed(6)}
+            </>
+          )}
+          {latency !== undefined && (
+            <>
+              {(totalTokens !== undefined || totalCost !== undefined) && ' | '}
+              Latency: {latency}ms
+            </>
+          )}
+          {generationTime !== undefined && (
+            <>
+              {(totalTokens !== undefined || totalCost !== undefined || latency !== undefined) && ' | '}
+              Gen Time: {generationTime}ms
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -20,12 +20,27 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface UsageInfo {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost?: number;
+  latency?: number;
+  generation_time?: number;
+}
+
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   model?: string;
   temperature?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  total_cost?: number;
+  latency?: number;
+  generation_time?: number;
   created_at: string;
 }
 
@@ -40,6 +55,7 @@ export type OnChunkCallback = (chunk: string) => void;
 export type OnConversationCallback = (conversationId: string) => void;
 export type OnModelCallback = (model: string) => void;
 export type OnTemperatureCallback = (temperature: number) => void;
+export type OnUsageCallback = (usage: UsageInfo) => void;
 
 export class ChatService {
   async streamMessage(
@@ -53,7 +69,8 @@ export class ChatService {
     responseSchema?: string,
     model?: string,
     temperature?: number,
-    onTemperature?: OnTemperatureCallback
+    onTemperature?: OnTemperatureCallback,
+    onUsage?: OnUsageCallback
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -127,6 +144,18 @@ export class ChatService {
               const temp = parseFloat(content.slice(12));
               if (!isNaN(temp) && onTemperature) {
                 onTemperature(temp);
+              }
+            }
+            // Check for usage metadata
+            else if (content.startsWith('USAGE:')) {
+              try {
+                const usageJson = content.slice(6);
+                const usage: UsageInfo = JSON.parse(usageJson);
+                if (onUsage) {
+                  onUsage(usage);
+                }
+              } catch (e) {
+                console.error('Error parsing usage data:', e);
               }
             }
             // Skip [DONE] and empty events

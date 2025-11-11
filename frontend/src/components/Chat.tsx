@@ -12,6 +12,12 @@ interface ChatMessage {
   content: string;
   model?: string;
   temperature?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  totalCost?: number;
+  latency?: number;
+  generationTime?: number;
 }
 
 interface ChatProps {
@@ -131,6 +137,12 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           content: msg.content,
           model: msg.model,
           temperature: msg.temperature,
+          promptTokens: msg.prompt_tokens,
+          completionTokens: msg.completion_tokens,
+          totalTokens: msg.total_tokens,
+          totalCost: msg.total_cost,
+          latency: msg.latency,
+          generationTime: msg.generation_time,
         }))
       );
     } catch (error) {
@@ -222,6 +234,24 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
               updated[updated.length - 1] = {
                 ...updated[updated.length - 1],
                 temperature: temp,
+              };
+            }
+            return updated;
+          });
+        },
+        (usage) => {
+          // Update the last message (assistant) with usage data
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                promptTokens: usage.prompt_tokens,
+                completionTokens: usage.completion_tokens,
+                totalTokens: usage.total_tokens,
+                totalCost: usage.total_cost,
+                latency: usage.latency,
+                generationTime: usage.generation_time,
               };
             }
             return updated;
@@ -325,6 +355,12 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             content={msg.content}
             model={'model' in msg ? msg.model : undefined}
             temperature={'temperature' in msg ? msg.temperature : undefined}
+            promptTokens={'promptTokens' in msg ? msg.promptTokens : undefined}
+            completionTokens={'completionTokens' in msg ? msg.completionTokens : undefined}
+            totalTokens={'totalTokens' in msg ? msg.totalTokens : undefined}
+            totalCost={'totalCost' in msg ? msg.totalCost : undefined}
+            latency={'latency' in msg ? msg.latency : undefined}
+            generationTime={'generationTime' in msg ? msg.generationTime : undefined}
             conversationFormat={conversationFormat}
             colors={colors}
           />

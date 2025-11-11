@@ -6,33 +6,45 @@
     "tier": "free"
   },
   {
-    "id": "google/gemini-2.5-flash",
-    "name": "Gemini 2.5 Flash",
-    "provider": "Google",
-    "tier": "paid"
-  },
-  {
-    "id": "openai/gpt-5-mini",
-    "name": "GPT-5 Mini",
-    "provider": "OpenAI",
-    "tier": "paid"
-  },
-  {
     "id": "z-ai/glm-4.5-air:free",
     "name": "GLM 4.5 Air (Free)",
     "provider": "Z-AI",
     "tier": "free"
   },
   {
-    "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
-    "name": "Tongyi DeepResearch 30B (Free)",
-    "provider": "Alibaba",
+    "id": "openrouter/polaris-alpha",
+    "name": "Polaris Alpha (Free)",
+    "provider": "OpenRouter",
     "tier": "free"
   },
   {
-    "id": "openrouter/polaris-alpha",
-    "name": "Polaris Alpha",
-    "provider": "OpenRouter",
+    "id": "z-ai/glm-4.6",
+    "name": "GLM 4.6",
+    "provider": "Z-AI",
+    "tier": "paid"
+  },
+  {
+    "id": "google/gemini-2.5-flash",
+    "name": "Gemini 2.5 Flash",
+    "provider": "Google",
+    "tier": "paid"
+  },
+  {
+    "id": "anthropic/claude-sonnet-4.5",
+    "name": "Claude Sonnet 4.5",
+    "provider": "Anthropic",
+    "tier": "paid"
+  },
+  {
+    "id": "liquid/lfm-2.2-6b",
+    "name": "LFM 2.2 6B",
+    "provider": "Liquid",
+    "tier": "paid"
+  },
+  {
+    "id": "openai/gpt-oss-120b",
+    "name": "GPT OSS 120B",
+    "provider": "OpenAI",
     "tier": "paid"
   }
 ]
