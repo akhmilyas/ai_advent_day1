@@ -44,12 +44,16 @@ type ConversationsResponse struct {
 }
 
 type MessageData struct {
-	ID          string   `json:"id"`
-	Role        string   `json:"role"`
-	Content     string   `json:"content"`
-	Model       string   `json:"model,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	CreatedAt   string   `json:"created_at"`
+	ID               string   `json:"id"`
+	Role             string   `json:"role"`
+	Content          string   `json:"content"`
+	Model            string   `json:"model,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	PromptTokens     *int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens *int     `json:"completion_tokens,omitempty"`
+	TotalTokens      *int     `json:"total_tokens,omitempty"`
+	TotalCost        *float64 `json:"total_cost,omitempty"`
+	CreatedAt        string   `json:"created_at"`
 }
 
 type MessagesResponse struct {
@@ -139,8 +143,8 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add user message to database (user messages don't have a model or temperature)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil); err != nil {
+	// Add user message to database (user messages don't have a model, temperature, or usage data)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -176,8 +180,8 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		usedModel = llm.GetModel()
 	}
 
-	// Add assistant response to database with model and temperature
-	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature); err != nil {
+	// Add assistant response to database with model and temperature (no usage data for non-streaming)
+	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, "", nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
 		http.Error(w, "Error saving response", http.StatusInternalServerError)
 		return
@@ -259,8 +263,8 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Add user message to database (user messages don't have a model or temperature)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil); err != nil {
+	// Add user message to database (user messages don't have a model, temperature, or usage data)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -332,23 +336,83 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		log.Printf("[CHAT] Sent temperature: %.2f", *req.Temperature)
 	}
 
-	// Buffer to accumulate the full response
+	// Buffer to accumulate the full response and metadata
 	var fullResponse string
+	var generationID string
+	var usage *llm.ResponseUsage
 
 	// Stream chunks to client using SSE format
-	for chunk := range chunks {
-		fullResponse += chunk
-		// Escape newlines in chunk for SSE format
-		escapedChunk := strings.ReplaceAll(chunk, "\n", "\\n")
-		// Send chunk as SSE event
-		fmt.Fprintf(w, "data: %s\n\n", escapedChunk)
+	for streamChunk := range chunks {
+		if streamChunk.Metadata != nil {
+			// Capture metadata from final chunk
+			if streamChunk.Metadata.GenerationID != "" {
+				generationID = streamChunk.Metadata.GenerationID
+			}
+			if streamChunk.Metadata.Usage != nil {
+				usage = streamChunk.Metadata.Usage
+			}
+		} else if streamChunk.Content != "" {
+			// Stream content chunk
+			fullResponse += streamChunk.Content
+			// Escape newlines in chunk for SSE format
+			escapedChunk := strings.ReplaceAll(streamChunk.Content, "\n", "\\n")
+			// Send chunk as SSE event
+			fmt.Fprintf(w, "data: %s\n\n", escapedChunk)
+			flusher.Flush()
+			log.Printf("[CHAT] Sent chunk: %q", streamChunk.Content)
+		}
+	}
+
+	// Fetch cost information from OpenRouter if generation ID is available
+	var totalCost *float64
+	var promptTokens, completionTokens, totalTokens *int
+
+	if generationID != "" {
+		log.Printf("[CHAT] Fetching generation cost for ID: %s", generationID)
+		if genData, err := llm.FetchGenerationCost(generationID); err == nil {
+			totalCost = &genData.TotalCost
+			promptTokens = &genData.TokensPrompt
+			completionTokens = &genData.TokensCompletion
+			totalTokensVal := genData.TokensPrompt + genData.TokensCompletion
+			totalTokens = &totalTokensVal
+
+			// Send usage data via SSE
+			fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,\"total_cost\":%.6f}\n\n",
+				*promptTokens, *completionTokens, *totalTokens, *totalCost)
+			flusher.Flush()
+			log.Printf("[CHAT] Sent usage data: tokens=%d, cost=$%.6f", *totalTokens, *totalCost)
+		} else {
+			log.Printf("[CHAT] Error fetching generation cost: %v", err)
+			// Fallback to usage data from streaming response if available
+			if usage != nil {
+				promptTokens = &usage.PromptTokens
+				completionTokens = &usage.CompletionTokens
+				totalTokens = &usage.TotalTokens
+
+				// Send usage data without cost via SSE
+				fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}\n\n",
+					*promptTokens, *completionTokens, *totalTokens)
+				flusher.Flush()
+				log.Printf("[CHAT] Sent usage data (no cost): tokens=%d", *totalTokens)
+			}
+		}
+	} else if usage != nil {
+		// No generation ID but have usage from stream
+		promptTokens = &usage.PromptTokens
+		completionTokens = &usage.CompletionTokens
+		totalTokens = &usage.TotalTokens
+
+		// Send usage data without cost via SSE
+		fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}\n\n",
+			*promptTokens, *completionTokens, *totalTokens)
 		flusher.Flush()
-		log.Printf("[CHAT] Sent chunk: %q", chunk)
+		log.Printf("[CHAT] Sent usage data (no cost): tokens=%d", *totalTokens)
 	}
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature); err != nil {
+		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature,
+			generationID, promptTokens, completionTokens, totalTokens, totalCost); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}
 		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
@@ -444,12 +508,16 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	msgData := make([]MessageData, 0, len(messages))
 	for _, msg := range messages {
 		msgData = append(msgData, MessageData{
-			ID:          msg.ID,
-			Role:        msg.Role,
-			Content:     msg.Content,
-			Model:       msg.Model,
-			Temperature: msg.Temperature,
-			CreatedAt:   msg.CreatedAt.String(),
+			ID:               msg.ID,
+			Role:             msg.Role,
+			Content:          msg.Content,
+			Model:            msg.Model,
+			Temperature:      msg.Temperature,
+			PromptTokens:     msg.PromptTokens,
+			CompletionTokens: msg.CompletionTokens,
+			TotalTokens:      msg.TotalTokens,
+			TotalCost:        msg.TotalCost,
+			CreatedAt:        msg.CreatedAt.String(),
 		})
 	}
 

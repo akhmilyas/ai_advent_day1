@@ -14,6 +14,7 @@ import (
 )
 
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
+const openRouterGenerationURL = "https://openrouter.ai/api/v1/generation"
 
 type Message struct {
 	Role    string `json:"role"`
@@ -34,11 +35,30 @@ type ChatRequest struct {
 	Provider    *Provider `json:"provider,omitempty"`
 }
 
+type ResponseUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type ChatResponse struct {
+	ID      string `json:"id"`
 	Choices []struct {
 		Message Message `json:"message"`
 		Delta   Message `json:"delta"`
 	} `json:"choices"`
+	Usage *ResponseUsage `json:"usage,omitempty"`
+}
+
+type StreamMetadata struct {
+	GenerationID string
+	Usage        *ResponseUsage
+}
+
+type StreamChunk struct {
+	Content  string
+	Metadata *StreamMetadata
+	IsDone   bool
 }
 
 func GetAPIKey() string {
@@ -197,7 +217,7 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan string, error) {
+func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -256,12 +276,15 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 	}
 
 	// Create channel to stream chunks
-	chunks := make(chan string)
+	chunks := make(chan StreamChunk)
 
 	// Start reading stream in a goroutine
 	go func() {
 		defer resp.Body.Close()
 		defer close(chunks)
+
+		var generationID string
+		var usage *ResponseUsage
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -282,13 +305,38 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 					continue
 				}
 
+				// Capture generation ID if present
+				if streamResp.ID != "" && generationID == "" {
+					generationID = streamResp.ID
+					log.Printf("[LLM] Captured generation ID: %s", generationID)
+				}
+
+				// Capture usage data if present (sent at end with empty choices)
+				if streamResp.Usage != nil {
+					usage = streamResp.Usage
+					log.Printf("[LLM] Captured usage: prompt=%d, completion=%d, total=%d",
+						usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+				}
+
 				// Extract content from delta field (streaming responses use delta)
 				if len(streamResp.Choices) > 0 && streamResp.Choices[0].Delta.Content != "" {
 					chunk := streamResp.Choices[0].Delta.Content
-					chunks <- chunk
+					chunks <- StreamChunk{Content: chunk}
 					log.Printf("[LLM] Stream chunk: %q", chunk)
 				}
 			}
+		}
+
+		// Send final metadata chunk
+		if generationID != "" || usage != nil {
+			chunks <- StreamChunk{
+				Metadata: &StreamMetadata{
+					GenerationID: generationID,
+					Usage:        usage,
+				},
+				IsDone: true,
+			}
+			log.Printf("[LLM] Sent final metadata chunk")
 		}
 
 		if err := scanner.Err(); err != nil {
@@ -297,4 +345,62 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 	}()
 
 	return chunks, nil
+}
+
+// GenerationData represents cost and usage information from OpenRouter
+type GenerationData struct {
+	ID                     string  `json:"id"`
+	TotalCost              float64 `json:"total_cost"`
+	TokensPrompt           int     `json:"tokens_prompt"`
+	TokensCompletion       int     `json:"tokens_completion"`
+	NativeTokensPrompt     int     `json:"native_tokens_prompt"`
+	NativeTokensCompletion int     `json:"native_tokens_completion"`
+}
+
+type GenerationResponse struct {
+	Data GenerationData `json:"data"`
+}
+
+// FetchGenerationCost fetches cost information for a generation from OpenRouter
+func FetchGenerationCost(generationID string) (*GenerationData, error) {
+	if generationID == "" {
+		return nil, fmt.Errorf("generation ID is empty")
+	}
+
+	apiKey := GetAPIKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
+	}
+
+	url := fmt.Sprintf("%s?id=%s", openRouterGenerationURL, generationID)
+	log.Printf("[LLM] Fetching generation cost from: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var genResp GenerationResponse
+	if err := json.NewDecoder(resp.Body).Decode(&genResp); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+
+	log.Printf("[LLM] Generation cost: $%.6f, tokens: prompt=%d, completion=%d",
+		genResp.Data.TotalCost, genResp.Data.TokensPrompt, genResp.Data.TokensCompletion)
+
+	return &genResp.Data, nil
 }

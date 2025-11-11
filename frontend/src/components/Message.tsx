@@ -9,6 +9,10 @@ interface MessageProps {
   content: string;
   model?: string;
   temperature?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  totalCost?: number;
   conversationFormat: ResponseFormat | null;
   colors: ReturnType<typeof getTheme>;
 }
@@ -296,7 +300,7 @@ const renderXmlAsTree = (xmlString: string, colors: ReturnType<typeof getTheme>)
   }
 };
 
-export const Message: React.FC<MessageProps> = ({ role, content, model, temperature, conversationFormat, colors }) => {
+export const Message: React.FC<MessageProps> = ({ role, content, model, temperature, promptTokens, completionTokens, totalTokens, totalCost, conversationFormat, colors }) => {
   const styles = getStyles(colors);
 
   return (
@@ -325,6 +329,24 @@ export const Message: React.FC<MessageProps> = ({ role, content, model, temperat
           </span>
         )}
       </div>
+      {role === 'assistant' && (totalTokens !== undefined || totalCost !== undefined) && (
+        <div style={{ fontSize: '10px', marginBottom: '6px', opacity: 0.5, fontFamily: 'monospace' }}>
+          {totalTokens !== undefined && (
+            <>
+              Tokens: {totalTokens}
+              {promptTokens !== undefined && completionTokens !== undefined && (
+                <> (prompt: {promptTokens}, completion: {completionTokens})</>
+              )}
+            </>
+          )}
+          {totalCost !== undefined && (
+            <>
+              {totalTokens !== undefined && ' | '}
+              Cost: ${totalCost.toFixed(6)}
+            </>
+          )}
+        </div>
+      )}
       <div style={role === 'assistant' ? styles.assistantContent : styles.messageContent}>
         {role === 'assistant' ? (
           conversationFormat === 'json' ? (
