@@ -53,6 +53,8 @@ type MessageData struct {
 	CompletionTokens *int     `json:"completion_tokens,omitempty"`
 	TotalTokens      *int     `json:"total_tokens,omitempty"`
 	TotalCost        *float64 `json:"total_cost,omitempty"`
+	Latency          *int     `json:"latency,omitempty"`
+	GenerationTime   *int     `json:"generation_time,omitempty"`
 	CreatedAt        string   `json:"created_at"`
 }
 
@@ -144,7 +146,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add user message to database (user messages don't have a model, temperature, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil); err != nil {
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -181,7 +183,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add assistant response to database with model and temperature (no usage data for non-streaming)
-	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, "", nil, nil, nil, nil); err != nil {
+	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
 		http.Error(w, "Error saving response", http.StatusInternalServerError)
 		return
@@ -264,7 +266,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Add user message to database (user messages don't have a model, temperature, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil); err != nil {
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -366,21 +368,25 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Fetch cost information from OpenRouter if generation ID is available
 	var totalCost *float64
 	var promptTokens, completionTokens, totalTokens *int
+	var latency, generationTime *int
 
 	if generationID != "" {
 		log.Printf("[CHAT] Fetching generation cost for ID: %s", generationID)
 		if genData, err := llm.FetchGenerationCost(generationID); err == nil {
 			totalCost = &genData.TotalCost
-			promptTokens = &genData.TokensPrompt
-			completionTokens = &genData.TokensCompletion
-			totalTokensVal := genData.TokensPrompt + genData.TokensCompletion
+			// Use native tokens instead of regular tokens
+			promptTokens = &genData.NativeTokensPrompt
+			completionTokens = &genData.NativeTokensCompletion
+			totalTokensVal := genData.NativeTokensPrompt + genData.NativeTokensCompletion
 			totalTokens = &totalTokensVal
+			latency = &genData.Latency
+			generationTime = &genData.GenerationTime
 
 			// Send usage data via SSE
-			fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,\"total_cost\":%.6f}\n\n",
-				*promptTokens, *completionTokens, *totalTokens, *totalCost)
+			fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,\"total_cost\":%.6f,\"latency\":%d,\"generation_time\":%d}\n\n",
+				*promptTokens, *completionTokens, *totalTokens, *totalCost, *latency, *generationTime)
 			flusher.Flush()
-			log.Printf("[CHAT] Sent usage data: tokens=%d, cost=$%.6f", *totalTokens, *totalCost)
+			log.Printf("[CHAT] Sent usage data: tokens=%d, cost=$%.6f, latency=%dms, generation_time=%dms", *totalTokens, *totalCost, *latency, *generationTime)
 		} else {
 			log.Printf("[CHAT] Error fetching generation cost: %v", err)
 			// Fallback to usage data from streaming response if available
@@ -412,7 +418,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
 		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature,
-			generationID, promptTokens, completionTokens, totalTokens, totalCost); err != nil {
+			generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}
 		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
@@ -517,6 +523,8 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 			CompletionTokens: msg.CompletionTokens,
 			TotalTokens:      msg.TotalTokens,
 			TotalCost:        msg.TotalCost,
+			Latency:          msg.Latency,
+			GenerationTime:   msg.GenerationTime,
 			CreatedAt:        msg.CreatedAt.String(),
 		})
 	}

@@ -33,6 +33,8 @@ type Message struct {
 	CompletionTokens *int
 	TotalTokens      *int
 	TotalCost        *float64
+	Latency          *int // Time to first token in milliseconds
+	GenerationTime   *int // Total generation time in milliseconds
 	CreatedAt        time.Time
 }
 
@@ -121,19 +123,19 @@ func GetConversation(convID string) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func AddMessage(conversationID string, role, content, model string, temperature *float64, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64) (*Message, error) {
+func AddMessage(conversationID string, role, content, model string, temperature *float64, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
 	db := GetDB()
 
 	msgID := uuid.New().String()
 	var createdAt time.Time
 
 	query := `
-	INSERT INTO messages (id, conversation_id, role, content, model, temperature, generation_id, prompt_tokens, completion_tokens, total_tokens, total_cost)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	INSERT INTO messages (id, conversation_id, role, content, model, temperature, generation_id, prompt_tokens, completion_tokens, total_tokens, total_cost, latency, generation_time)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	RETURNING id, created_at
 	`
 
-	err := db.QueryRow(query, msgID, conversationID, role, content, model, temperature, generationID, promptTokens, completionTokens, totalTokens, totalCost).Scan(&msgID, &createdAt)
+	err := db.QueryRow(query, msgID, conversationID, role, content, model, temperature, generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime).Scan(&msgID, &createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("error adding message: %w", err)
 	}
@@ -156,7 +158,15 @@ func AddMessage(conversationID string, role, content, model string, temperature 
 	if totalCost != nil {
 		costStr = fmt.Sprintf("$%.6f", *totalCost)
 	}
-	log.Printf("[DB] Added message to conversation %s with model %s, temperature %s, tokens %s, cost %s", conversationID, model, tempStr, tokensStr, costStr)
+	latencyStr := "nil"
+	if latency != nil {
+		latencyStr = fmt.Sprintf("%dms", *latency)
+	}
+	genTimeStr := "nil"
+	if generationTime != nil {
+		genTimeStr = fmt.Sprintf("%dms", *generationTime)
+	}
+	log.Printf("[DB] Added message to conversation %s with model %s, temperature %s, tokens %s, cost %s, latency %s, generation_time %s", conversationID, model, tempStr, tokensStr, costStr, latencyStr, genTimeStr)
 
 	return &Message{
 		ID:               msgID,
@@ -170,6 +180,8 @@ func AddMessage(conversationID string, role, content, model string, temperature 
 		CompletionTokens: completionTokens,
 		TotalTokens:      totalTokens,
 		TotalCost:        totalCost,
+		Latency:          latency,
+		GenerationTime:   generationTime,
 		CreatedAt:        createdAt,
 	}, nil
 }
@@ -212,7 +224,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 
 	query := `
 	SELECT id, conversation_id, role, content, COALESCE(model, ''), temperature,
-	       COALESCE(generation_id, ''), prompt_tokens, completion_tokens, total_tokens, total_cost, created_at
+	       COALESCE(generation_id, ''), prompt_tokens, completion_tokens, total_tokens, total_cost, latency, generation_time, created_at
 	FROM messages
 	WHERE conversation_id = $1
 	ORDER BY created_at ASC
@@ -228,7 +240,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 	for rows.Next() {
 		var msg Message
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Model, &msg.Temperature,
-			&msg.GenerationID, &msg.PromptTokens, &msg.CompletionTokens, &msg.TotalTokens, &msg.TotalCost, &msg.CreatedAt); err != nil {
+			&msg.GenerationID, &msg.PromptTokens, &msg.CompletionTokens, &msg.TotalTokens, &msg.TotalCost, &msg.Latency, &msg.GenerationTime, &msg.CreatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning message: %w", err)
 		}
 		messages = append(messages, msg)

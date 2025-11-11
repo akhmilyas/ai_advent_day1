@@ -16,6 +16,8 @@ interface ChatMessage {
   completionTokens?: number;
   totalTokens?: number;
   totalCost?: number;
+  latency?: number;
+  generationTime?: number;
 }
 
 interface ChatProps {
@@ -139,6 +141,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           completionTokens: msg.completion_tokens,
           totalTokens: msg.total_tokens,
           totalCost: msg.total_cost,
+          latency: msg.latency,
+          generationTime: msg.generation_time,
         }))
       );
     } catch (error) {
@@ -246,6 +250,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
                 completionTokens: usage.completion_tokens,
                 totalTokens: usage.total_tokens,
                 totalCost: usage.total_cost,
+                latency: usage.latency,
+                generationTime: usage.generation_time,
               };
             }
             return updated;
@@ -353,6 +359,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             completionTokens={'completionTokens' in msg ? msg.completionTokens : undefined}
             totalTokens={'totalTokens' in msg ? msg.totalTokens : undefined}
             totalCost={'totalCost' in msg ? msg.totalCost : undefined}
+            latency={'latency' in msg ? msg.latency : undefined}
+            generationTime={'generationTime' in msg ? msg.generationTime : undefined}
             conversationFormat={conversationFormat}
             colors={colors}
           />

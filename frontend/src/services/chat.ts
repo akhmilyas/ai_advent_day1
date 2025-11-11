@@ -25,6 +25,8 @@ export interface UsageInfo {
   completion_tokens: number;
   total_tokens: number;
   total_cost?: number;
+  latency?: number;
+  generation_time?: number;
 }
 
 export interface ConversationMessage {
@@ -37,6 +39,8 @@ export interface ConversationMessage {
   completion_tokens?: number;
   total_tokens?: number;
   total_cost?: number;
+  latency?: number;
+  generation_time?: number;
   created_at: string;
 }
 

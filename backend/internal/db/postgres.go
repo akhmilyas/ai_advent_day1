@@ -187,7 +187,9 @@ func createTables() error {
 	ADD COLUMN IF NOT EXISTS prompt_tokens INTEGER,
 	ADD COLUMN IF NOT EXISTS completion_tokens INTEGER,
 	ADD COLUMN IF NOT EXISTS total_tokens INTEGER,
-	ADD COLUMN IF NOT EXISTS total_cost REAL;
+	ADD COLUMN IF NOT EXISTS total_cost REAL,
+	ADD COLUMN IF NOT EXISTS latency INTEGER,
+	ADD COLUMN IF NOT EXISTS generation_time INTEGER;
 	`
 
 	if _, err := db.Exec(alterMessagesUsageSQL); err != nil {

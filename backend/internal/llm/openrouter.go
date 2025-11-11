@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
@@ -173,7 +174,7 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 		TopP:        GetTopP(format),
 		TopK:        GetTopK(format),
 		Provider: &Provider{
-			RequireParameters: true,
+			RequireParameters: false,
 		},
 	}
 
@@ -244,7 +245,7 @@ func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format
 		TopP:        GetTopP(format),
 		TopK:        GetTopK(format),
 		Provider: &Provider{
-			RequireParameters: true,
+			RequireParameters: false,
 		},
 	}
 
@@ -355,6 +356,8 @@ type GenerationData struct {
 	TokensCompletion       int     `json:"tokens_completion"`
 	NativeTokensPrompt     int     `json:"native_tokens_prompt"`
 	NativeTokensCompletion int     `json:"native_tokens_completion"`
+	Latency                int     `json:"latency"`        // Time to first token in milliseconds
+	GenerationTime         int     `json:"generation_time"` // Total generation time in milliseconds
 }
 
 type GenerationResponse struct {
@@ -362,6 +365,7 @@ type GenerationResponse struct {
 }
 
 // FetchGenerationCost fetches cost information for a generation from OpenRouter
+// with retry logic to handle timing delays in data availability
 func FetchGenerationCost(generationID string) (*GenerationData, error) {
 	if generationID == "" {
 		return nil, fmt.Errorf("generation ID is empty")
@@ -373,34 +377,61 @@ func FetchGenerationCost(generationID string) (*GenerationData, error) {
 	}
 
 	url := fmt.Sprintf("%s?id=%s", openRouterGenerationURL, generationID)
-	log.Printf("[LLM] Fetching generation cost from: %s", url)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
+	// Retry configuration: 3 attempts with exponential backoff (500ms, 1s, 2s)
+	maxRetries := 3
+	baseDelay := 500 * time.Millisecond
 
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * time.Duration(1<<uint(attempt-1)) // Exponential: 500ms, 1s, 2s
+			log.Printf("[LLM] Retrying cost fetch in %v (attempt %d/%d)", delay, attempt+1, maxRetries)
+			time.Sleep(delay)
+		}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error sending request: %w", err)
-	}
-	defer resp.Body.Close()
+		log.Printf("[LLM] Fetching generation cost from: %s (attempt %d/%d)", url, attempt+1, maxRetries)
 
-	if resp.StatusCode != http.StatusOK {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("error sending request: %w", err)
+			continue
+		}
+
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		resp.Body.Close()
+
+		// Log raw response for debugging
+		log.Printf("[LLM] Raw generation API response (status %d): %s", resp.StatusCode, string(body))
+
+		if resp.StatusCode == http.StatusNotFound {
+			// 404 means data not ready yet, retry
+			lastErr = fmt.Errorf("generation not found yet (status 404)")
+			continue
+		} else if resp.StatusCode != http.StatusOK {
+			// Other errors are not retryable
+			return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var genResp GenerationResponse
+		if err := json.Unmarshal(body, &genResp); err != nil {
+			return nil, fmt.Errorf("error decoding response: %w", err)
+		}
+
+		log.Printf("[LLM] Generation - cost: $%.6f, native_tokens: prompt=%d, completion=%d, latency: %dms, generation_time: %dms",
+			genResp.Data.TotalCost, genResp.Data.NativeTokensPrompt, genResp.Data.NativeTokensCompletion,
+			genResp.Data.Latency, genResp.Data.GenerationTime)
+
+		return &genResp.Data, nil
 	}
 
-	var genResp GenerationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&genResp); err != nil {
-		return nil, fmt.Errorf("error decoding response: %w", err)
-	}
-
-	log.Printf("[LLM] Generation cost: $%.6f, tokens: prompt=%d, completion=%d",
-		genResp.Data.TotalCost, genResp.Data.TokensPrompt, genResp.Data.TokensCompletion)
-
-	return &genResp.Data, nil
+	return nil, fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
 }
