@@ -3,11 +3,11 @@ FROM golang:1.25.3-alpine AS builder
 
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum* ./
+# Copy go mod files from backend directory
+COPY backend/go.mod backend/go.sum* ./
 
-# Copy source code
-COPY . .
+# Copy backend source code
+COPY backend/ ./
 
 # Download and tidy modules
 RUN go mod download && go mod tidy
@@ -27,6 +27,9 @@ COPY --from=builder /app/server .
 
 # Copy the config directory
 COPY --from=builder /app/config ./backend/config
+
+# Copy War and Peace text file from root context
+COPY warandpeace.txt ./warandpeace.txt
 
 # Expose port
 EXPOSE 8080

@@ -6,6 +6,18 @@
     "tier": "free"
   },
   {
+    "id": "meta-llama/llama-3-8b-instruct",
+    "name": "Llama 3 8B Instruct",
+    "provider": "Meta",
+    "tier": "paid"
+  },
+  {
+    "id": "mistralai/mistral-7b-instruct:free",
+    "name": "Mistral 7B Instruct (Free)",
+    "provider": "Mistral AI",
+    "tier": "free"
+  },
+  {
     "id": "z-ai/glm-4.5-air:free",
     "name": "GLM 4.5 Air (Free)",
     "provider": "Z-AI",

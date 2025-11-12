@@ -4,6 +4,7 @@ import { getTheme } from '../themes';
 import { ChatService, Model } from '../services/chat';
 
 export type ResponseFormat = 'text' | 'json' | 'xml';
+export type ProviderType = 'openrouter' | 'genkit';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -21,6 +22,12 @@ interface SettingsModalProps {
   onModelChange: (model: string) => void;
   temperature: number;
   onTemperatureChange: (temperature: number) => void;
+  provider: ProviderType;
+  onProviderChange: (provider: ProviderType) => void;
+  useWarAndPeace: boolean;
+  onUseWarAndPeaceChange: (use: boolean) => void;
+  warAndPeacePercent: number;
+  onWarAndPeacePercentChange: (percent: number) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -39,6 +46,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onModelChange,
   temperature,
   onTemperatureChange,
+  provider,
+  onProviderChange,
+  useWarAndPeace,
+  onUseWarAndPeaceChange,
+  warAndPeacePercent,
+  onWarAndPeacePercentChange,
 }) => {
   // Initialize with the correct format from the start
   const initialFormat = conversationFormat || responseFormat;
@@ -49,6 +62,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [tempSchema, setTempSchema] = useState(initialSchema);
   const [tempModel, setTempModel] = useState(selectedModel);
   const [tempTemperature, setTempTemperature] = useState(temperature);
+  const [tempProvider, setTempProvider] = useState<ProviderType>(provider);
+  const [tempWarAndPeacePercent, setTempWarAndPeacePercent] = useState(warAndPeacePercent);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
@@ -74,6 +89,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTempPrompt(systemPrompt);
     setTempModel(selectedModel);
     setTempTemperature(temperature);
+    setTempProvider(provider);
+    setTempWarAndPeacePercent(warAndPeacePercent);
     // For existing conversations with a format, use the locked format
     // Otherwise use the user's preference from localStorage
     if (conversationFormat) {
@@ -89,7 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else {
       setTempSchema(responseSchema);
     }
-  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, selectedModel, temperature]);
+  }, [systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, selectedModel, temperature, provider, warAndPeacePercent]);
 
   // For display, always use tempFormat (which is set from conversation or user preference)
   const displayFormat = tempFormat;
@@ -101,6 +118,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onSystemPromptChange(tempPrompt);
     onModelChange(tempModel);
     onTemperatureChange(tempTemperature);
+    onProviderChange(tempProvider);
+    onWarAndPeacePercentChange(tempWarAndPeacePercent);
     // Only save format changes if it's a new conversation
     if (!isExistingConversation) {
       onResponseFormatChange(tempFormat);
@@ -115,6 +134,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTempSchema(responseSchema);
     setTempModel(selectedModel);
     setTempTemperature(temperature);
+    setTempProvider(provider);
+    setTempWarAndPeacePercent(warAndPeacePercent);
     onClose();
   };
 
@@ -143,6 +164,91 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div style={styles.content}>
+          {/* Provider Selector */}
+          <div style={styles.providerSection}>
+            <label style={styles.label}>
+              LLM Provider
+              <p style={styles.description}>
+                Choose between direct OpenRouter API or Genkit framework.
+              </p>
+            </label>
+            <div style={styles.providerToggle}>
+              <label style={{
+                ...styles.providerOption,
+                ...(tempProvider === 'openrouter' ? styles.providerOptionActive : {}),
+              }}>
+                <input
+                  type="radio"
+                  name="provider"
+                  value="openrouter"
+                  checked={tempProvider === 'openrouter'}
+                  onChange={(e) => setTempProvider(e.target.value as ProviderType)}
+                  style={styles.radio}
+                />
+                <span>OpenRouter (Direct API)</span>
+              </label>
+              <label style={{
+                ...styles.providerOption,
+                ...(tempProvider === 'genkit' ? styles.providerOptionActive : {}),
+              }}>
+                <input
+                  type="radio"
+                  name="provider"
+                  value="genkit"
+                  checked={tempProvider === 'genkit'}
+                  onChange={(e) => setTempProvider(e.target.value as ProviderType)}
+                  style={styles.radio}
+                />
+                <span>Genkit (Firebase Framework)</span>
+              </label>
+            </div>
+          </div>
+
+          {/* War and Peace Context Toggle */}
+          <div style={styles.warAndPeaceSection}>
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={useWarAndPeace}
+                onChange={(e) => onUseWarAndPeaceChange(e.target.checked)}
+                style={styles.checkbox}
+              />
+              <div>
+                <span style={styles.checkboxText}>Add War and Peace context</span>
+                <p style={styles.description}>
+                  Appends the full text of "War and Peace" by Leo Tolstoy to the system prompt (3.2 MB).
+                  This provides extensive Russian literature context to the AI.
+                </p>
+              </div>
+            </label>
+
+            {/* Percentage Slider - only show when War and Peace is enabled */}
+            {useWarAndPeace && (
+              <div style={styles.percentageSliderSection}>
+                <label style={styles.label}>
+                  Context Size: {tempWarAndPeacePercent}%
+                  <p style={styles.description}>
+                    Controls what percentage of the War and Peace text to include (from the beginning).
+                  </p>
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="100"
+                  step="1"
+                  value={tempWarAndPeacePercent}
+                  onChange={(e) => setTempWarAndPeacePercent(parseInt(e.target.value))}
+                  style={styles.slider}
+                />
+                <div style={styles.sliderLabels}>
+                  <span style={styles.sliderLabel}>1% (~32 KB)</span>
+                  <span style={styles.sliderLabel}>50% (~1.6 MB)</span>
+                  <span style={styles.sliderLabel}>100% (~3.2 MB)</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Model Selector */}
           <div style={styles.modelSection}>
             <label style={styles.label}>
@@ -591,5 +697,53 @@ const getStyles = (colors: ReturnType<typeof getTheme>) => ({
   sliderLabel: {
     fontSize: '11px',
     color: colors.textSecondary,
+  },
+  providerSection: {
+    marginBottom: '20px',
+  },
+  providerToggle: {
+    display: 'flex',
+    gap: '12px',
+    flexDirection: 'row' as const,
+  },
+  providerOption: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '12px',
+    border: `2px solid ${colors.border}`,
+    borderRadius: '6px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    backgroundColor: colors.surface,
+    color: colors.text,
+  },
+  providerOptionActive: {
+    borderColor: colors.buttonPrimary,
+    backgroundColor: `${colors.buttonPrimary}15`,
+  },
+  warAndPeaceSection: {
+    marginBottom: '20px',
+  },
+  checkboxLabel: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '12px',
+    cursor: 'pointer',
+  },
+  checkbox: {
+    marginTop: '2px',
+    width: '18px',
+    height: '18px',
+    cursor: 'pointer',
+  },
+  checkboxText: {
+    fontWeight: 500,
+    color: colors.text,
+  },
+  percentageSliderSection: {
+    marginTop: '16px',
+    paddingLeft: '30px',
   },
 });

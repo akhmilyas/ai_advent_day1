@@ -28,6 +28,7 @@ type Message struct {
 	Content          string
 	Model            string
 	Temperature      *float64
+	Provider         string   // LLM provider used (openrouter, genkit)
 	GenerationID     string
 	PromptTokens     *int
 	CompletionTokens *int
@@ -123,19 +124,19 @@ func GetConversation(convID string) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func AddMessage(conversationID string, role, content, model string, temperature *float64, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
+func AddMessage(conversationID string, role, content, model string, temperature *float64, provider string, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
 	db := GetDB()
 
 	msgID := uuid.New().String()
 	var createdAt time.Time
 
 	query := `
-	INSERT INTO messages (id, conversation_id, role, content, model, temperature, generation_id, prompt_tokens, completion_tokens, total_tokens, total_cost, latency, generation_time)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	INSERT INTO messages (id, conversation_id, role, content, model, temperature, provider, generation_id, prompt_tokens, completion_tokens, total_tokens, total_cost, latency, generation_time)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	RETURNING id, created_at
 	`
 
-	err := db.QueryRow(query, msgID, conversationID, role, content, model, temperature, generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime).Scan(&msgID, &createdAt)
+	err := db.QueryRow(query, msgID, conversationID, role, content, model, temperature, provider, generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime).Scan(&msgID, &createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("error adding message: %w", err)
 	}
@@ -166,7 +167,11 @@ func AddMessage(conversationID string, role, content, model string, temperature 
 	if generationTime != nil {
 		genTimeStr = fmt.Sprintf("%dms", *generationTime)
 	}
-	log.Printf("[DB] Added message to conversation %s with model %s, temperature %s, tokens %s, cost %s, latency %s, generation_time %s", conversationID, model, tempStr, tokensStr, costStr, latencyStr, genTimeStr)
+	providerStr := provider
+	if providerStr == "" {
+		providerStr = "unknown"
+	}
+	log.Printf("[DB] Added message to conversation %s with provider %s, model %s, temperature %s, tokens %s, cost %s, latency %s, generation_time %s", conversationID, providerStr, model, tempStr, tokensStr, costStr, latencyStr, genTimeStr)
 
 	return &Message{
 		ID:               msgID,
@@ -175,6 +180,7 @@ func AddMessage(conversationID string, role, content, model string, temperature 
 		Content:          content,
 		Model:            model,
 		Temperature:      temperature,
+		Provider:         provider,
 		GenerationID:     generationID,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
@@ -223,7 +229,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 	db := GetDB()
 
 	query := `
-	SELECT id, conversation_id, role, content, COALESCE(model, ''), temperature,
+	SELECT id, conversation_id, role, content, COALESCE(model, ''), temperature, COALESCE(provider, ''),
 	       COALESCE(generation_id, ''), prompt_tokens, completion_tokens, total_tokens, total_cost, latency, generation_time, created_at
 	FROM messages
 	WHERE conversation_id = $1
@@ -239,7 +245,7 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Model, &msg.Temperature,
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Model, &msg.Temperature, &msg.Provider,
 			&msg.GenerationID, &msg.PromptTokens, &msg.CompletionTokens, &msg.TotalTokens, &msg.TotalCost, &msg.Latency, &msg.GenerationTime, &msg.CreatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning message: %w", err)
 		}

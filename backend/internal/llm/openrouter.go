@@ -17,6 +17,14 @@ import (
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 const openRouterGenerationURL = "https://openrouter.ai/api/v1/generation"
 
+// OpenRouterProvider implements LLMProvider using direct OpenRouter API calls
+type OpenRouterProvider struct{}
+
+// NewOpenRouterProvider creates a new OpenRouter provider instance
+func NewOpenRouterProvider() *OpenRouterProvider {
+	return &OpenRouterProvider{}
+}
+
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -147,7 +155,7 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
-func ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (string, error) {
+func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (string, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -218,7 +226,7 @@ func ChatWithHistory(messages []Message, customSystemPrompt string, format strin
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
-func ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error) {
+func (p *OpenRouterProvider) ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error) {
 	apiKey := GetAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
@@ -366,7 +374,7 @@ type GenerationResponse struct {
 
 // FetchGenerationCost fetches cost information for a generation from OpenRouter
 // with retry logic to handle timing delays in data availability
-func FetchGenerationCost(generationID string) (*GenerationData, error) {
+func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*GenerationData, error) {
 	if generationID == "" {
 		return nil, fmt.Errorf("generation ID is empty")
 	}
@@ -434,4 +442,9 @@ func FetchGenerationCost(generationID string) (*GenerationData, error) {
 	}
 
 	return nil, fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
+}
+
+// GetDefaultModel returns the default model for OpenRouter provider
+func (p *OpenRouterProvider) GetDefaultModel() string {
+	return GetModel()
 }
