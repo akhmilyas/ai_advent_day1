@@ -3,7 +3,7 @@ import { ChatService } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
-import { SettingsModal, ResponseFormat } from './SettingsModal';
+import { SettingsModal, ResponseFormat, ProviderType } from './SettingsModal';
 import { Sidebar } from './Sidebar';
 import { Message } from './Message';
 
@@ -39,6 +39,9 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
   const [conversationSchema, setConversationSchema] = useState<string>('');
   const [temperature, setTemperature] = useState<number>(0.7);
+  const [provider, setProvider] = useState<ProviderType>('openrouter');
+  const [useWarAndPeace, setUseWarAndPeace] = useState<boolean>(false);
+  const [warAndPeacePercent, setWarAndPeacePercent] = useState<number>(100);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -51,6 +54,9 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     const savedSchema = localStorage.getItem('responseSchema');
     const savedModel = localStorage.getItem('selectedModel');
     const savedTemperature = localStorage.getItem('temperature');
+    const savedProvider = localStorage.getItem('provider');
+    const savedUseWarAndPeace = localStorage.getItem('useWarAndPeace');
+    const savedWarAndPeacePercent = localStorage.getItem('warAndPeacePercent');
 
     if (savedPrompt) {
       setSystemPrompt(savedPrompt);
@@ -84,6 +90,18 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         setTemperature(temp);
       }
     }
+    if (savedProvider && (savedProvider === 'openrouter' || savedProvider === 'genkit')) {
+      setProvider(savedProvider as ProviderType);
+    }
+    if (savedUseWarAndPeace === 'true') {
+      setUseWarAndPeace(true);
+    }
+    if (savedWarAndPeacePercent) {
+      const percent = parseInt(savedWarAndPeacePercent);
+      if (!isNaN(percent) && percent >= 0 && percent <= 100) {
+        setWarAndPeacePercent(percent);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -113,6 +131,21 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const handleTemperatureChange = (temp: number) => {
     setTemperature(temp);
     localStorage.setItem('temperature', temp.toString());
+  };
+
+  const handleProviderChange = (prov: ProviderType) => {
+    setProvider(prov);
+    localStorage.setItem('provider', prov);
+  };
+
+  const handleUseWarAndPeaceChange = (use: boolean) => {
+    setUseWarAndPeace(use);
+    localStorage.setItem('useWarAndPeace', use.toString());
+  };
+
+  const handleWarAndPeacePercentChange = (percent: number) => {
+    setWarAndPeacePercent(percent);
+    localStorage.setItem('warAndPeacePercent', percent.toString());
   };
 
   const handleSelectConversation = async (convId: string, title: string) => {
@@ -256,7 +289,10 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             }
             return updated;
           });
-        }
+        },
+        provider,
+        useWarAndPeace,
+        warAndPeacePercent
       );
       setLoading(false);
     } catch (error) {
@@ -429,6 +465,12 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           onModelChange={handleModelChange}
           temperature={temperature}
           onTemperatureChange={handleTemperatureChange}
+          provider={provider}
+          onProviderChange={handleProviderChange}
+          useWarAndPeace={useWarAndPeace}
+          onUseWarAndPeaceChange={handleUseWarAndPeaceChange}
+          warAndPeacePercent={warAndPeacePercent}
+          onWarAndPeacePercentChange={handleWarAndPeacePercentChange}
         />
       </div>
     </div>

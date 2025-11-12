@@ -3,6 +3,7 @@ package main
 import (
 	"chat-app/internal/auth"
 	"chat-app/internal/config"
+	"chat-app/internal/context"
 	"chat-app/internal/db"
 	"chat-app/internal/handlers"
 	"log"
@@ -47,6 +48,13 @@ func main() {
 		log.Fatalf("Failed to load models configuration: %v", err)
 	}
 	log.Printf("Loaded %d models", len(config.GetAvailableModels()))
+
+	// Load War and Peace text
+	log.Printf("Loading War and Peace context...")
+	warAndPeacePath := "warandpeace.txt"
+	if err := context.LoadWarAndPeace(warAndPeacePath); err != nil {
+		log.Printf("Warning: Failed to load War and Peace text: %v", err)
+	}
 
 	// Seed demo user
 	if err := db.SeedDemoUser(); err != nil {

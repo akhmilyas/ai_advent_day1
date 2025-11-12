@@ -3,6 +3,7 @@ package handlers
 import (
 	"chat-app/internal/auth"
 	"chat-app/internal/config"
+	"chat-app/internal/context"
 	"chat-app/internal/db"
 	"chat-app/internal/llm"
 	"encoding/json"
@@ -13,14 +14,17 @@ import (
 )
 
 type ChatRequest struct {
-	Message         string        `json:"message,omitempty"`
-	Messages        []llm.Message `json:"messages,omitempty"`
-	ConversationID  string        `json:"conversation_id,omitempty"`
-	SystemPrompt    string        `json:"system_prompt,omitempty"`
-	ResponseFormat  string        `json:"response_format,omitempty"`
-	ResponseSchema  string        `json:"response_schema,omitempty"`
-	Model           string        `json:"model,omitempty"`
-	Temperature     *float64      `json:"temperature,omitempty"`
+	Message             string        `json:"message,omitempty"`
+	Messages            []llm.Message `json:"messages,omitempty"`
+	ConversationID      string        `json:"conversation_id,omitempty"`
+	SystemPrompt        string        `json:"system_prompt,omitempty"`
+	ResponseFormat      string        `json:"response_format,omitempty"`
+	ResponseSchema      string        `json:"response_schema,omitempty"`
+	Model               string        `json:"model,omitempty"`
+	Temperature         *float64      `json:"temperature,omitempty"`
+	Provider            string        `json:"provider,omitempty"`               // "openrouter" or "genkit"
+	UseWarAndPeace      bool          `json:"use_war_and_peace,omitempty"`      // Append War and Peace to system prompt
+	WarAndPeacePercent  int           `json:"war_and_peace_percent,omitempty"`  // Percentage of War and Peace to include (1-100)
 }
 
 type ChatResponse struct {
@@ -145,8 +149,8 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add user message to database (user messages don't have a model, temperature, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil, nil, nil); err != nil {
+	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -162,8 +166,12 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
 
+	// Get LLM provider based on request
+	provider := llm.GetProviderFromString(req.Provider)
+	log.Printf("[CHAT] Using provider: %T", provider)
+
 	// Get response with full conversation history
-	response, err := llm.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model, req.Temperature)
+	response, err := provider.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -179,11 +187,11 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Determine which model was actually used
 	usedModel := model
 	if usedModel == "" {
-		usedModel = llm.GetModel()
+		usedModel = provider.GetDefaultModel()
 	}
 
-	// Add assistant response to database with model and temperature (no usage data for non-streaming)
-	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, "", nil, nil, nil, nil, nil, nil); err != nil {
+	// Add assistant response to database with model, temperature, and provider (no usage data for non-streaming)
+	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, req.Provider, "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
 		http.Error(w, "Error saving response", http.StatusInternalServerError)
 		return
@@ -193,7 +201,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ChatResponse{
 		Response:       response,
 		ConversationID: conversation.ID,
-		Model:          llm.GetModel(),
+		Model:          usedModel,
 	})
 }
 
@@ -265,8 +273,8 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Add user message to database (user messages don't have a model, temperature, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", nil, nil, nil, nil, nil, nil); err != nil {
+	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
+	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
 		http.Error(w, "Error saving message", http.StatusInternalServerError)
 		return
@@ -305,10 +313,41 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		effectiveSystemPrompt = req.SystemPrompt
 	}
 
+	// Append War and Peace context if requested
+	if req.UseWarAndPeace {
+		warAndPeaceText := context.GetWarAndPeace()
+		if warAndPeaceText != "" {
+			// Calculate how much of the text to include based on percentage
+			percent := req.WarAndPeacePercent
+			if percent <= 0 || percent > 100 {
+				percent = 100 // Default to 100% if invalid
+			}
+
+			// Calculate the number of characters to include
+			totalChars := len(warAndPeaceText)
+			charsToInclude := (totalChars * percent) / 100
+
+			// Get the substring from the beginning
+			textToAppend := warAndPeaceText[:charsToInclude]
+
+			effectiveSystemPrompt = effectiveSystemPrompt + "\n\nContext (War and Peace by Leo Tolstoy):\n" + textToAppend
+			log.Printf("[CHAT] Appended War and Peace context: %d%% (%.2f MB of %.2f MB)",
+				percent,
+				float64(len(textToAppend))/1024/1024,
+				float64(totalChars)/1024/1024)
+		} else {
+			log.Printf("[CHAT] Warning: War and Peace text not loaded")
+		}
+	}
+
 	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
+	// Get LLM provider based on request
+	provider := llm.GetProviderFromString(req.Provider)
+	log.Printf("[CHAT] Using provider for streaming: %T", provider)
+
 	// Get streaming response from LLM
-	chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model, req.Temperature)
+	chunks, err := provider.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
@@ -318,7 +357,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Determine which model was actually used
 	usedModel := model
 	if usedModel == "" {
-		usedModel = llm.GetModel()
+		usedModel = provider.GetDefaultModel()
 	}
 
 	// Send conversation ID as first event
@@ -372,7 +411,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	if generationID != "" {
 		log.Printf("[CHAT] Fetching generation cost for ID: %s", generationID)
-		if genData, err := llm.FetchGenerationCost(generationID); err == nil {
+		if genData, err := provider.FetchGenerationCost(generationID); err == nil {
 			totalCost = &genData.TotalCost
 			// Use native tokens instead of regular tokens
 			promptTokens = &genData.NativeTokensPrompt
@@ -417,7 +456,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature,
+		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature, req.Provider,
 			generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}

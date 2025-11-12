@@ -196,5 +196,15 @@ func createTables() error {
 		return fmt.Errorf("error altering messages table for usage tracking: %w", err)
 	}
 
+	// Add provider column if it doesn't exist
+	alterMessagesProviderSQL := `
+	ALTER TABLE messages
+	ADD COLUMN IF NOT EXISTS provider VARCHAR(50);
+	`
+
+	if _, err := db.Exec(alterMessagesProviderSQL); err != nil {
+		return fmt.Errorf("error altering messages table for provider: %w", err)
+	}
+
 	return nil
 }

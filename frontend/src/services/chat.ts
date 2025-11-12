@@ -35,6 +35,7 @@ export interface ConversationMessage {
   content: string;
   model?: string;
   temperature?: number;
+  provider?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
@@ -70,7 +71,10 @@ export class ChatService {
     model?: string,
     temperature?: number,
     onTemperature?: OnTemperatureCallback,
-    onUsage?: OnUsageCallback
+    onUsage?: OnUsageCallback,
+    provider?: string,
+    useWarAndPeace?: boolean,
+    warAndPeacePercent?: number
   ): Promise<void> {
     const payload: any = { message };
     if (conversationId) {
@@ -90,6 +94,15 @@ export class ChatService {
     }
     if (temperature !== undefined) {
       payload.temperature = temperature;
+    }
+    if (provider) {
+      payload.provider = provider;
+    }
+    if (useWarAndPeace !== undefined) {
+      payload.use_war_and_peace = useWarAndPeace;
+    }
+    if (warAndPeacePercent !== undefined) {
+      payload.war_and_peace_percent = warAndPeacePercent;
     }
 
     const response = await fetch(`${API_URL}/api/chat/stream`, {
