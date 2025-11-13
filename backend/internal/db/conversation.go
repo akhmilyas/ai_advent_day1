@@ -11,13 +11,24 @@ import (
 
 // Conversation represents a conversation in the database
 type Conversation struct {
-	ID             string
-	UserID         string
-	Title          string
-	ResponseFormat string
-	ResponseSchema string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	UserID          string
+	Title           string
+	ResponseFormat  string
+	ResponseSchema  string
+	ActiveSummaryID *string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ConversationSummary represents a summary of conversation messages
+type ConversationSummary struct {
+	ID                      string
+	ConversationID          string
+	SummaryContent          string
+	SummarizedUpToMessageID *string
+	UsageCount              int
+	CreatedAt               time.Time
 }
 
 // Message represents a message in a conversation
@@ -110,12 +121,12 @@ func GetConversation(convID string) (*Conversation, error) {
 
 	var conv Conversation
 	query := `
-	SELECT id, user_id, title, COALESCE(response_format, 'text'), COALESCE(response_schema, ''), created_at, updated_at
+	SELECT id, user_id, title, COALESCE(response_format, 'text'), COALESCE(response_schema, ''), active_summary_id, created_at, updated_at
 	FROM conversations
 	WHERE id = $1
 	`
 
-	err := db.QueryRow(query, convID).Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.ResponseFormat, &conv.ResponseSchema, &conv.CreatedAt, &conv.UpdatedAt)
+	err := db.QueryRow(query, convID).Scan(&conv.ID, &conv.UserID, &conv.Title, &conv.ResponseFormat, &conv.ResponseSchema, &conv.ActiveSummaryID, &conv.CreatedAt, &conv.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving conversation: %w", err)
 	}
@@ -267,5 +278,189 @@ func DeleteConversation(convID string) error {
 
 	log.Printf("[DB] Deleted conversation: %s", convID)
 	return nil
+}
+
+// CreateSummary creates a new conversation summary
+func CreateSummary(conversationID string, summaryContent string, summarizedUpToMessageID *string) (*ConversationSummary, error) {
+	db := GetDB()
+
+	summaryID := uuid.New().String()
+	var createdAt time.Time
+
+	query := `
+	INSERT INTO conversation_summaries (id, conversation_id, summary_content, summarized_up_to_message_id, usage_count)
+	VALUES ($1, $2, $3, $4, 0)
+	RETURNING id, created_at
+	`
+
+	err := db.QueryRow(query, summaryID, conversationID, summaryContent, summarizedUpToMessageID).Scan(&summaryID, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("error creating summary: %w", err)
+	}
+
+	log.Printf("[DB] Created summary %s for conversation %s", summaryID, conversationID)
+
+	return &ConversationSummary{
+		ID:                      summaryID,
+		ConversationID:          conversationID,
+		SummaryContent:          summaryContent,
+		SummarizedUpToMessageID: summarizedUpToMessageID,
+		UsageCount:              0,
+		CreatedAt:               createdAt,
+	}, nil
+}
+
+// GetActiveSummary retrieves the most recent summary for a conversation
+func GetActiveSummary(conversationID string) (*ConversationSummary, error) {
+	db := GetDB()
+
+	var summary ConversationSummary
+	query := `
+	SELECT id, conversation_id, summary_content, summarized_up_to_message_id, usage_count, created_at
+	FROM conversation_summaries
+	WHERE conversation_id = $1
+	ORDER BY created_at DESC
+	LIMIT 1
+	`
+
+	err := db.QueryRow(query, conversationID).Scan(
+		&summary.ID,
+		&summary.ConversationID,
+		&summary.SummaryContent,
+		&summary.SummarizedUpToMessageID,
+		&summary.UsageCount,
+		&summary.CreatedAt,
+	)
+	if err != nil {
+		return nil, err // Return nil if no summary exists
+	}
+
+	log.Printf("[DB] Retrieved most recent summary %s (created: %s, usage_count: %d) for conversation %s",
+		summary.ID, summary.CreatedAt.Format(time.RFC3339), summary.UsageCount, conversationID)
+
+	return &summary, nil
+}
+
+// GetAllSummaries retrieves all summaries for a conversation in chronological order
+func GetAllSummaries(conversationID string) ([]ConversationSummary, error) {
+	db := GetDB()
+
+	query := `
+	SELECT id, conversation_id, summary_content, summarized_up_to_message_id, usage_count, created_at
+	FROM conversation_summaries
+	WHERE conversation_id = $1
+	ORDER BY created_at ASC
+	`
+
+	rows, err := db.Query(query, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []ConversationSummary
+	for rows.Next() {
+		var summary ConversationSummary
+		if err := rows.Scan(
+			&summary.ID,
+			&summary.ConversationID,
+			&summary.SummaryContent,
+			&summary.SummarizedUpToMessageID,
+			&summary.UsageCount,
+			&summary.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning summary: %w", err)
+		}
+		summaries = append(summaries, summary)
+	}
+
+	log.Printf("[DB] Retrieved %d summaries for conversation %s", len(summaries), conversationID)
+	return summaries, nil
+}
+
+// UpdateConversationActiveSummary updates the active summary for a conversation
+func UpdateConversationActiveSummary(conversationID string, summaryID string) error {
+	db := GetDB()
+
+	query := `UPDATE conversations SET active_summary_id = $1 WHERE id = $2`
+	_, err := db.Exec(query, summaryID, conversationID)
+	if err != nil {
+		return fmt.Errorf("error updating active summary: %w", err)
+	}
+
+	log.Printf("[DB] Updated active summary for conversation %s to %s", conversationID, summaryID)
+	return nil
+}
+
+// IncrementSummaryUsageCount increments the usage count for a summary
+func IncrementSummaryUsageCount(summaryID string) error {
+	db := GetDB()
+
+	query := `UPDATE conversation_summaries SET usage_count = usage_count + 1 WHERE id = $1`
+	_, err := db.Exec(query, summaryID)
+	if err != nil {
+		return fmt.Errorf("error incrementing summary usage count: %w", err)
+	}
+
+	log.Printf("[DB] Incremented usage count for summary %s", summaryID)
+	return nil
+}
+
+// GetMessagesAfterMessage retrieves all messages after a specific message ID in a conversation
+func GetMessagesAfterMessage(conversationID string, afterMessageID string) ([]llm.Message, error) {
+	db := GetDB()
+
+	query := `
+	SELECT role, content
+	FROM messages
+	WHERE conversation_id = $1 AND created_at > (
+		SELECT created_at FROM messages WHERE id = $2
+	)
+	ORDER BY created_at ASC
+	`
+
+	rows, err := db.Query(query, conversationID, afterMessageID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying messages after message: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []llm.Message
+	for rows.Next() {
+		var role, content string
+		if err := rows.Scan(&role, &content); err != nil {
+			return nil, fmt.Errorf("error scanning message: %w", err)
+		}
+		messages = append(messages, llm.Message{
+			Role:    role,
+			Content: content,
+		})
+	}
+
+	return messages, nil
+}
+
+// GetLastMessageID retrieves the ID of the last message in a conversation
+func GetLastMessageID(conversationID string) (*string, error) {
+	db := GetDB()
+
+	var messageID string
+	query := `
+	SELECT id
+	FROM messages
+	WHERE conversation_id = $1
+	ORDER BY created_at DESC
+	LIMIT 1
+	`
+
+	err := db.QueryRow(query, conversationID).Scan(&messageID)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, nil // No messages yet
+		}
+		return nil, fmt.Errorf("error getting last message ID: %w", err)
+	}
+
+	return &messageID, nil
 }
 

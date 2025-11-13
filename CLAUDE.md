@@ -59,9 +59,10 @@ This is a fullstack chat application with three main layers:
    - Manages conversation history, message persistence, and model tracking
 
 3. **Database (PostgreSQL)** on port 5432
-   - Three tables: users, conversations, messages
+   - Four tables: users, conversations, messages, conversation_summaries
    - Cascading deletes for referential integrity
    - Indexes on foreign keys and frequently queried fields
+   - Summary tracking with usage count for progressive re-summarization
 
 ### Data Flow for Chat (Streaming)
 
@@ -221,6 +222,7 @@ conversations (
   title VARCHAR,
   response_format VARCHAR(10) DEFAULT 'text',    -- 'text', 'json', or 'xml'
   response_schema TEXT,                          -- Schema definition for structured formats
+  active_summary_id UUID,                        -- References most recent summary (deprecated, query by created_at instead)
   created_at TIMESTAMP,
   updated_at TIMESTAMP
 )
@@ -234,6 +236,15 @@ messages (
   temperature REAL,                              -- Temperature used for generating response (0.0-2.0)
   created_at TIMESTAMP
 )
+  ↓
+conversation_summaries (
+  id UUID PRIMARY KEY,
+  conversation_id UUID REFERENCES conversations ON DELETE CASCADE,
+  summary_content TEXT NOT NULL,                 -- LLM-generated summary of conversation
+  summarized_up_to_message_id UUID REFERENCES messages ON DELETE SET NULL,  -- Last message included in summary
+  usage_count INTEGER DEFAULT 0,                 -- How many times this summary was used (triggers re-summarization at 2+)
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
 ```
 
 **Key Features:**
@@ -243,9 +254,15 @@ messages (
 - **response_schema** stores JSON/XML schema definition for validation
 - **model** column tracks which LLM model generated each assistant response
 - **temperature** column tracks temperature setting (0.0-2.0) used for each response
+- **conversation_summaries** table stores LLM-generated conversation summaries:
+  - **summary_content**: Text summary of conversation up to a specific message
+  - **summarized_up_to_message_id**: Tracks which message was the last one summarized
+  - **usage_count**: Increments each time summary is used; triggers re-summarization at 2+
+  - Multiple summaries per conversation supported (progressive re-summarization)
+  - Most recent summary retrieved via `ORDER BY created_at DESC LIMIT 1`
 - Messages store role ('user' or 'assistant') for history reconstruction
 - Cascade deletes prevent orphaned records
-- Indexes on user_id and conversation_id for query performance
+- Indexes on user_id, conversation_id, and conversation_summaries.conversation_id for query performance
 - UUIDs generated on the backend using `google/uuid` package
 - COALESCE used in queries to handle NULL values: `COALESCE(response_format, 'text')`, `COALESCE(model, '')`
 
@@ -683,3 +700,144 @@ user: {...}
 6. **Error Handling**: Falls back to `<pre>` if parsing fails
 7. **Parameter Optimization**: Lower temperature for structured formats (0.3 vs 0.7)
 8. **Type-Aware Display**: Different colors/styles for strings, numbers, booleans, null, objects, arrays
+
+## Conversation Summarization Feature
+
+### Overview
+The application supports manual conversation summarization with progressive re-summarization. This allows long conversations to use summaries instead of full message history as LLM context, reducing token usage while maintaining conversation coherence.
+
+### How It Works
+
+**User Trigger:**
+- User clicks 📝 button in chat interface
+- Sends POST request to `/api/conversations/{id}/summarize`
+
+**First Summarization:**
+1. Backend checks if active summary exists via `db.GetActiveSummary(conversationID)`
+2. If no summary: Retrieves all messages from conversation
+3. Calls `llm.ChatForSummarization()` with summarization-only system prompt (no default system prompt)
+4. Creates new summary in database with `db.CreateSummary()`
+5. Returns summary content and `summarized_up_to_message_id`
+
+**Progressive Re-Summarization (after 2+ uses):**
+1. Backend detects `activeSummary.UsageCount >= 2`
+2. Builds input: `[old summary as context] + [messages after last summarized message]`
+3. Calls LLM to create new summary from combined content
+4. Saves new summary to database (old summary remains for history)
+5. Updates conversation's `active_summary_id` to new summary
+
+**Usage in Chat:**
+- When user sends new message, `ChatStreamHandler` checks for active summary
+- If summary exists:
+  - Fetches only messages AFTER `summarized_up_to_message_id`
+  - Prepends summary as context to system prompt
+  - Increments summary `usage_count`
+- LLM receives: `[system prompt with summary context] + [recent messages only]`
+
+### Frontend Implementation
+
+**Components:**
+- `Chat.tsx`:
+  - State: `summaries: Array<{ upToMessageId: string; content: string }>`
+  - `handleSummarize()`: Calls API, adds to summaries array, reloads messages to get IDs
+  - Loads summaries on conversation open via `chatService.getConversationSummaries()`
+
+- `chat.ts`:
+  - `summarizeConversation()`: POST to `/api/conversations/{id}/summarize`
+  - `getConversationSummaries()`: GET all summaries for displaying on conversation load
+
+**Visual Display:**
+```tsx
+{messages.map((msg, idx) => {
+  const summaryForThisMessage = summaries.find(s => s.upToMessageId === msg.id);
+  return (
+    <>
+      <Message {...msg} />
+      {summaryForThisMessage && (
+        <details>
+          <summary>📋 Messages above have been summarized (click to view)</summary>
+          <div>{summaryForThisMessage.content}</div>
+        </details>
+      )}
+    </>
+  );
+})}
+```
+
+### Backend Implementation
+
+**Database Functions (`internal/db/conversation.go`):**
+- `CreateSummary(conversationID, summaryContent, summarizedUpToMessageID)`: Creates new summary
+- `GetActiveSummary(conversationID)`: Returns most recent summary (`ORDER BY created_at DESC LIMIT 1`)
+- `GetAllSummaries(conversationID)`: Returns all summaries in chronological order
+- `IncrementSummaryUsageCount(summaryID)`: Increments usage_count by 1
+- `GetMessagesAfterMessage(conversationID, afterMessageID)`: Fetches messages created after specific message
+- `GetLastMessageID(conversationID)`: Returns ID of most recent message
+- `UpdateConversationActiveSummary(conversationID, summaryID)`: Updates active_summary_id reference
+
+**API Endpoints (`internal/handlers/chat.go`):**
+- `SummarizeConversationHandler`:
+  - POST `/api/conversations/{id}/summarize`
+  - Validates ownership, determines summarization strategy, calls LLM, saves result
+  - Returns: `{summary, summarized_up_to_message_id, conversation_id}`
+
+- `GetConversationSummariesHandler`:
+  - GET `/api/conversations/{id}/summaries`
+  - Returns all summaries for a conversation
+  - Response: `{summaries: [{id, summary_content, summarized_up_to_message_id, usage_count, created_at}]}`
+
+**LLM Integration (`internal/llm/openrouter.go`):**
+- `ChatForSummarization(messages, summarizationPrompt, model, temperature)`:
+  - Uses `buildMessagesWithCustomSystemPrompt()` instead of `buildMessagesWithHistory()`
+  - Sends ONLY the summarization prompt (no default system prompt)
+  - Returns plain text summary
+
+**Summarization Logic:**
+```go
+// Check existing summary
+activeSummary, err := db.GetActiveSummary(convID)
+
+if err != nil || activeSummary == nil {
+    // No summary - summarize all messages
+    messagesToSummarize, _ = db.GetConversationMessages(convID)
+} else if activeSummary.UsageCount >= 2 {
+    // Re-summarize: old summary + new messages
+    messagesToSummarize = []llm.Message{
+        {Role: "assistant", Content: fmt.Sprintf("Previous summary:\n%s", activeSummary.SummaryContent)},
+    }
+    newMessages, _ := db.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
+    messagesToSummarize = append(messagesToSummarize, newMessages...)
+} else {
+    // Summary exists but usage_count < 2 - return existing
+    return existingSummary
+}
+```
+
+### System Prompt Scenarios
+
+The implementation carefully separates three system prompt scenarios:
+
+1. **Normal Chat** (no summary):
+   ```
+   [default system prompt] + [user custom prompt] + [full conversation history]
+   ```
+
+2. **Summarization Request**:
+   ```
+   [summarization prompt ONLY] + [messages to summarize]
+   ```
+   No default system prompt or user custom prompt included
+
+3. **Chat After Summary**:
+   ```
+   [summary as context] + [default system prompt] + [user custom prompt] + [recent messages only]
+   ```
+
+### Key Technical Details
+
+- **Multiple summaries supported**: Each re-summarization creates a new row in `conversation_summaries`
+- **Most recent summary**: Retrieved via `ORDER BY created_at DESC LIMIT 1` (not via `active_summary_id`)
+- **Usage tracking**: `usage_count` incremented on each chat message sent after summary exists
+- **Message IDs required**: Frontend reloads messages after summarization to get server-generated UUIDs
+- **Collapsible UI**: Uses HTML5 `<details>` element for expandable summary view
+- **Persistence**: All summaries stored in database, loaded on conversation open

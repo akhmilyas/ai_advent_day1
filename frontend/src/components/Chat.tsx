@@ -8,6 +8,7 @@ import { Sidebar } from './Sidebar';
 import { Message } from './Message';
 
 interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   model?: string;
@@ -43,6 +44,8 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [useWarAndPeace, setUseWarAndPeace] = useState<boolean>(false);
   const [warAndPeacePercent, setWarAndPeacePercent] = useState<number>(100);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaries, setSummaries] = useState<Array<{ upToMessageId: string; content: string }>>([]);
   const chatService = useRef(new ChatService());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<{ refreshConversations: () => Promise<void> }>(null);
@@ -162,10 +165,20 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       if (conversation) {
         setConversationFormat((conversation.response_format || 'text') as ResponseFormat);
         setConversationSchema(conversation.response_schema || '');
+
+        // Load all summaries for this conversation from backend
+        try {
+          const loadedSummaries = await chatService.current.getConversationSummaries(convId);
+          setSummaries(loadedSummaries);
+        } catch (error) {
+          console.error('Error loading summaries:', error);
+          setSummaries([]);
+        }
       }
 
       setMessages(
         convMessages.map((msg) => ({
+          id: msg.id,
           role: msg.role,
           content: msg.content,
           model: msg.model,
@@ -191,6 +204,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     setModel('');
     setConversationFormat(null);
     setConversationSchema('');
+    setSummaries([]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -311,6 +325,52 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
     }
   };
 
+  const handleSummarize = async () => {
+    if (!conversationId || summarizing || messages.length === 0) return;
+
+    setSummarizing(true);
+    try {
+      const result = await chatService.current.summarizeConversation(conversationId, model, temperature);
+
+      // Add the new summary to the list
+      if (result.summarized_up_to_message_id && result.summary) {
+        setSummaries(prev => [...prev, {
+          upToMessageId: result.summarized_up_to_message_id,
+          content: result.summary
+        }]);
+      }
+
+      // Reload messages from server to get the IDs
+      const convMessages = await chatService.current.getConversationMessages(conversationId);
+      setMessages(
+        convMessages.map((msg) => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          model: msg.model,
+          temperature: msg.temperature,
+          promptTokens: msg.prompt_tokens,
+          completionTokens: msg.completion_tokens,
+          totalTokens: msg.total_tokens,
+          totalCost: msg.total_cost,
+          latency: msg.latency,
+          generationTime: msg.generation_time,
+        }))
+      );
+
+      // Also refresh the conversation list in sidebar to update the summary info
+      if (sidebarRef.current) {
+        await sidebarRef.current.refreshConversations();
+      }
+      alert('Conversation summarized successfully!');
+    } catch (error) {
+      console.error('Error summarizing conversation:', error);
+      alert('Failed to summarize conversation');
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
   const handleLogout = () => {
     AuthService.logout();
     onLogout();
@@ -340,6 +400,23 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             </div>
           </div>
         <div style={styles.buttonGroup}>
+          {conversationId && messages.length > 0 && (
+            <button
+              onClick={handleSummarize}
+              disabled={summarizing}
+              style={{
+                ...styles.themeButton,
+                backgroundColor: summarizing ? colors.border : colors.surface,
+                color: colors.text,
+                border: `1px solid ${colors.border}`,
+                opacity: summarizing ? 0.6 : 1,
+                cursor: summarizing ? 'wait' : 'pointer',
+              }}
+              title={summarizing ? 'Summarizing...' : 'Summarize conversation'}
+            >
+              {summarizing ? '⏳' : '📝'}
+            </button>
+          )}
           <button
             onClick={toggleTheme}
             style={{
@@ -384,23 +461,59 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           </div>
         )}
 
-        {messages.map((msg, idx) => (
-          <Message
-            key={idx}
-            role={msg.role}
-            content={msg.content}
-            model={'model' in msg ? msg.model : undefined}
-            temperature={'temperature' in msg ? msg.temperature : undefined}
-            promptTokens={'promptTokens' in msg ? msg.promptTokens : undefined}
-            completionTokens={'completionTokens' in msg ? msg.completionTokens : undefined}
-            totalTokens={'totalTokens' in msg ? msg.totalTokens : undefined}
-            totalCost={'totalCost' in msg ? msg.totalCost : undefined}
-            latency={'latency' in msg ? msg.latency : undefined}
-            generationTime={'generationTime' in msg ? msg.generationTime : undefined}
-            conversationFormat={conversationFormat}
-            colors={colors}
-          />
-        ))}
+        {messages.map((msg, idx) => {
+          // Find if this message is the end of a summary
+          const summaryForThisMessage = summaries.find(s => s.upToMessageId === msg.id);
+
+          return (
+            <React.Fragment key={idx}>
+              <Message
+                role={msg.role}
+                content={msg.content}
+                model={'model' in msg ? msg.model : undefined}
+                temperature={'temperature' in msg ? msg.temperature : undefined}
+                promptTokens={'promptTokens' in msg ? msg.promptTokens : undefined}
+                completionTokens={'completionTokens' in msg ? msg.completionTokens : undefined}
+                totalTokens={'totalTokens' in msg ? msg.totalTokens : undefined}
+                totalCost={'totalCost' in msg ? msg.totalCost : undefined}
+                latency={'latency' in msg ? msg.latency : undefined}
+                generationTime={'generationTime' in msg ? msg.generationTime : undefined}
+                conversationFormat={conversationFormat}
+                colors={colors}
+              />
+              {/* Show summary divider after the last summarized message */}
+              {summaryForThisMessage && (
+                <div
+                  style={{
+                    margin: '20px 0',
+                    padding: '15px',
+                    backgroundColor: colors.surface,
+                    borderRadius: '8px',
+                    border: `2px dashed ${colors.border}`,
+                    color: colors.textSecondary,
+                  }}
+                >
+                  <details>
+                    <summary style={{ cursor: 'pointer', fontStyle: 'italic', userSelect: 'none' }}>
+                      📋 Messages above have been summarized (click to view)
+                    </summary>
+                    <div style={{
+                      marginTop: '10px',
+                      padding: '10px',
+                      backgroundColor: colors.background,
+                      borderRadius: '4px',
+                      whiteSpace: 'pre-wrap',
+                      fontSize: '0.9em',
+                      color: colors.text,
+                    }}>
+                      {summaryForThisMessage.content || 'No summary content available'}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
 
         <div ref={messagesEndRef} />
       </div>

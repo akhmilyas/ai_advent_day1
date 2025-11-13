@@ -146,12 +146,27 @@ func GetTopK(format string) *int {
 
 func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
 	systemPrompt := GetSystemPrompt()
+
 	// If custom prompt is provided, append it to the default system prompt
 	if customPrompt != "" {
-		systemPrompt = systemPrompt + "\n\nAdditional instructions: " + customPrompt
+		systemPrompt = systemPrompt + "\n\n" + customPrompt
 	}
+
+	// Log the final system prompt
+	log.Printf("[LLM] System prompt (length: %d): %s", len(systemPrompt), systemPrompt)
+
 	// Prepend system message to the conversation history
 	return append([]Message{{Role: "system", Content: systemPrompt}}, messages...)
+}
+
+// buildMessagesWithCustomSystemPrompt builds messages with ONLY the custom prompt (no default)
+// Used for summarization where we don't want the default system prompt
+func buildMessagesWithCustomSystemPrompt(messages []Message, customPrompt string) []Message {
+	// Log the system prompt
+	log.Printf("[LLM] Using custom-only system prompt (length: %d): %s", len(customPrompt), customPrompt)
+
+	// Prepend system message to the conversation history
+	return append([]Message{{Role: "system", Content: customPrompt}}, messages...)
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
@@ -213,8 +228,15 @@ func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPro
 		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %w", err)
+	}
+
+	log.Printf("[LLM] Raw response body: %s", string(body))
+
 	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.Unmarshal(body, &chatResp); err != nil {
 		return "", fmt.Errorf("error decoding response: %w", err)
 	}
 
@@ -222,7 +244,89 @@ func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPro
 		return "", fmt.Errorf("no response from API")
 	}
 
-	return chatResp.Choices[0].Message.Content, nil
+	content := chatResp.Choices[0].Message.Content
+	log.Printf("[LLM] Extracted content length: %d", len(content))
+	return content, nil
+}
+
+// ChatForSummarization sends a chat request for summarization with ONLY the custom prompt (no default system prompt)
+func (p *OpenRouterProvider) ChatForSummarization(messages []Message, summarizationPrompt string, modelOverride string, temperature *float64) (string, error) {
+	apiKey := GetAPIKey()
+	if apiKey == "" {
+		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
+	}
+
+	model := modelOverride
+	if model == "" {
+		model = GetModel()
+	}
+
+	tempStr := "nil"
+	if temperature != nil {
+		tempStr = fmt.Sprintf("%.2f", *temperature)
+	}
+	log.Printf("[LLM] Calling OpenRouter API for summarization with model: %s, temperature: %s, message history count: %d", model, tempStr, len(messages))
+
+	messagesWithHistory := buildMessagesWithCustomSystemPrompt(messages, summarizationPrompt)
+
+	reqBody := ChatRequest{
+		Model:       model,
+		Messages:    messagesWithHistory,
+		Stream:      false,
+		Temperature: temperature,
+		TopP:        GetTopP("text"),
+		TopK:        GetTopK("text"),
+		Provider: &Provider{
+			RequireParameters: false,
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", openRouterURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("error creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "http://localhost:3000")
+	req.Header.Set("X-Title", "Chat App")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %w", err)
+	}
+
+	log.Printf("[LLM] Raw summarization response body: %s", string(body))
+
+	var chatResp ChatResponse
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		return "", fmt.Errorf("error decoding response: %w", err)
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no response from API")
+	}
+
+	content := chatResp.Choices[0].Message.Content
+	log.Printf("[LLM] Extracted summarization content length: %d", len(content))
+	return content, nil
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
