@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -35,12 +36,13 @@ type ChatResponse struct {
 }
 
 type ConversationInfo struct {
-	ID             string `json:"id"`
-	Title          string `json:"title"`
-	ResponseFormat string `json:"response_format"`
-	ResponseSchema string `json:"response_schema"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	ID                      string  `json:"id"`
+	Title                   string  `json:"title"`
+	ResponseFormat          string  `json:"response_format"`
+	ResponseSchema          string  `json:"response_schema"`
+	SummarizedUpToMessageID *string `json:"summarized_up_to_message_id,omitempty"`
+	CreatedAt               string  `json:"created_at"`
+	UpdatedAt               string  `json:"updated_at"`
 }
 
 type ConversationsResponse struct {
@@ -73,6 +75,30 @@ type DeleteResponse struct {
 
 type ModelsResponse struct {
 	Models []config.Model `json:"models"`
+}
+
+type SummarizeRequest struct {
+	Model       string   `json:"model,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+}
+
+type SummarizeResponse struct {
+	Summary              string `json:"summary"`
+	SummarizedUpToMsgID  string `json:"summarized_up_to_message_id,omitempty"`
+	ConversationID       string `json:"conversation_id"`
+	Error                string `json:"error,omitempty"`
+}
+
+type SummaryData struct {
+	ID                      string `json:"id"`
+	SummaryContent          string `json:"summary_content"`
+	SummarizedUpToMessageID string `json:"summarized_up_to_message_id"`
+	UsageCount              int    `json:"usage_count"`
+	CreatedAt               string `json:"created_at"`
+}
+
+type SummariesResponse struct {
+	Summaries []SummaryData `json:"summaries"`
 }
 
 type ChatHandlers struct{}
@@ -280,15 +306,44 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get conversation history
-	currentHistory, err := db.GetConversationMessages(conversation.ID)
-	if err != nil {
-		log.Printf("[CHAT] Error getting conversation history: %v", err)
-		http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
-		return
-	}
+	// Check if there's an active summary for this conversation
+	activeSummary, err := db.GetActiveSummary(conversation.ID)
+	var currentHistory []llm.Message
 
-	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
+	if err == nil && activeSummary != nil {
+		// Active summary exists - use it instead of full history
+		log.Printf("[CHAT] Using active summary (usage count: %d)", activeSummary.UsageCount)
+
+		// Get messages after the summarized point
+		if activeSummary.SummarizedUpToMessageID != nil {
+			newMessages, err := db.GetMessagesAfterMessage(conversation.ID, *activeSummary.SummarizedUpToMessageID)
+			if err != nil {
+				log.Printf("[CHAT] Error getting messages after summary: %v", err)
+				http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
+				return
+			}
+			currentHistory = newMessages
+			log.Printf("[CHAT] Using summary + %d new messages", len(newMessages))
+		} else {
+			// No messages after summary (shouldn't happen, but handle gracefully)
+			currentHistory = []llm.Message{}
+			log.Printf("[CHAT] Using summary with no new messages")
+		}
+
+		// Increment summary usage count
+		if err := db.IncrementSummaryUsageCount(activeSummary.ID); err != nil {
+			log.Printf("[CHAT] Warning: failed to increment summary usage count: %v", err)
+		}
+	} else {
+		// No active summary - use full conversation history
+		currentHistory, err = db.GetConversationMessages(conversation.ID)
+		if err != nil {
+			log.Printf("[CHAT] Error getting conversation history: %v", err)
+			http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[CHAT] Using full conversation history: %d messages", len(currentHistory))
+	}
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -303,8 +358,22 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Build the system prompt based on conversation's response format (stored in DB)
+	// If there's an active summary, combine it with the user's custom prompt
 	var effectiveSystemPrompt string
-	if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
+	if activeSummary != nil {
+		// Summary exists - use it as context and add user's system prompt
+		summaryContext := fmt.Sprintf("Previous conversation summary:\n%s\n\n", activeSummary.SummaryContent)
+
+		if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
+			effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
+		} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
+			effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
+		} else {
+			// For text format, combine summary with user's custom system prompt
+			effectiveSystemPrompt = summaryContext + req.SystemPrompt
+		}
+		log.Printf("[CHAT] Using summary as context with user prompt")
+	} else if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
 		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
 	} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
 		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
@@ -497,13 +566,20 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	// Convert to response format
 	convInfos := make([]ConversationInfo, 0, len(conversations))
 	for _, conv := range conversations {
+		// Get active summary for this conversation if it exists
+		var summarizedUpToMsgID *string
+		if summary, err := db.GetActiveSummary(conv.ID); err == nil && summary != nil {
+			summarizedUpToMsgID = summary.SummarizedUpToMessageID
+		}
+
 		convInfos = append(convInfos, ConversationInfo{
-			ID:             conv.ID,
-			Title:          conv.Title,
-			ResponseFormat: conv.ResponseFormat,
-			ResponseSchema: conv.ResponseSchema,
-			CreatedAt:      conv.CreatedAt.String(),
-			UpdatedAt:      conv.UpdatedAt.String(),
+			ID:                      conv.ID,
+			Title:                   conv.Title,
+			ResponseFormat:          conv.ResponseFormat,
+			ResponseSchema:          conv.ResponseSchema,
+			SummarizedUpToMessageID: summarizedUpToMsgID,
+			CreatedAt:               conv.CreatedAt.String(),
+			UpdatedAt:               conv.UpdatedAt.String(),
 		})
 	}
 
@@ -628,5 +704,236 @@ func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ModelsResponse{
 		Models: models,
+	})
+}
+
+// SummarizeConversationHandler creates a summary of the conversation
+func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.Context().Value(auth.UserContextKey).(string)
+	convID := r.PathValue("id")
+	log.Printf("Summarize conversation request from user: %s for conversation: %s", username, convID)
+
+	var req SummarizeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Empty body is acceptable, use defaults
+		req.Model = ""
+		req.Temperature = nil
+	}
+
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[SUMMARIZE] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get conversation and verify ownership
+	conversation, err := db.GetConversation(convID)
+	if err != nil {
+		log.Printf("[SUMMARIZE] Error getting conversation: %v", err)
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify user owns this conversation
+	if conversation.UserID != user.ID {
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	// Check if there's an existing active summary
+	activeSummary, err := db.GetActiveSummary(convID)
+	var messagesToSummarize []llm.Message
+	var lastMessageID *string
+
+	if err != nil || activeSummary == nil {
+		// No active summary exists - summarize all messages
+		log.Printf("[SUMMARIZE] No active summary found, summarizing all messages")
+		messagesToSummarize, err = db.GetConversationMessages(convID)
+		if err != nil {
+			log.Printf("[SUMMARIZE] Error getting conversation messages: %v", err)
+			http.Error(w, "Error retrieving messages", http.StatusInternalServerError)
+			return
+		}
+
+		// Get the last message ID
+		lastMessageID, err = db.GetLastMessageID(convID)
+		if err != nil {
+			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
+			http.Error(w, "Error retrieving last message", http.StatusInternalServerError)
+			return
+		}
+	} else if activeSummary.UsageCount >= 2 {
+		// Summary has been used 2+ times - create new summary from old summary + new messages
+		log.Printf("[SUMMARIZE] Active summary used %d times, creating new summary", activeSummary.UsageCount)
+
+		// Start with the old summary as a "system" message
+		messagesToSummarize = []llm.Message{
+			{Role: "assistant", Content: fmt.Sprintf("Previous summary:\n%s", activeSummary.SummaryContent)},
+		}
+
+		// Get messages after the last summarized message
+		if activeSummary.SummarizedUpToMessageID != nil {
+			newMessages, err := db.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
+			if err != nil {
+				log.Printf("[SUMMARIZE] Error getting messages after last summarized: %v", err)
+				http.Error(w, "Error retrieving new messages", http.StatusInternalServerError)
+				return
+			}
+			messagesToSummarize = append(messagesToSummarize, newMessages...)
+		}
+
+		// Get the last message ID
+		lastMessageID, err = db.GetLastMessageID(convID)
+		if err != nil {
+			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
+			http.Error(w, "Error retrieving last message", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Summary exists but hasn't been used enough yet - don't create new summary
+		log.Printf("[SUMMARIZE] Active summary exists with usage count %d, not creating new summary", activeSummary.UsageCount)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SummarizeResponse{
+			Summary:             activeSummary.SummaryContent,
+			SummarizedUpToMsgID: *activeSummary.SummarizedUpToMessageID,
+			ConversationID:      convID,
+		})
+		return
+	}
+
+	// Validate model if provided
+	model := req.Model
+	if model != "" && !config.IsValidModel(model) {
+		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+		return
+	}
+
+	// Get LLM provider (always use openrouter for summarization)
+	provider := llm.NewOpenRouterProvider()
+
+	// Build summarization system prompt
+	summarizationPrompt := os.Getenv("OPENROUTER_SUMMARIZATION_PROMPT")
+	if summarizationPrompt == "" {
+		summarizationPrompt = `You are a conversation summarizer. Your task is to create a concise, comprehensive summary of the conversation that captures:
+1. The main topics discussed
+2. Key questions asked and answers provided
+3. Important decisions or conclusions reached
+4. Any action items or next steps mentioned
+
+Format the summary in a clear, structured way that can be used as context for continuing the conversation. Keep the summary focused and avoid unnecessary details while preserving essential information.`
+	}
+
+	// Add the original system prompt from conversation format if it exists
+	if conversation.ResponseFormat == "text" {
+		// For text format, we should preserve any custom system prompt that was used
+		// However, we don't store the original system prompt, so we'll just use the summarization prompt
+		summarizationPrompt = summarizationPrompt
+	}
+
+	// Call LLM to generate summary (using ChatForSummarization to avoid default system prompt)
+	log.Printf("[SUMMARIZE] Calling LLM to generate summary with %d messages", len(messagesToSummarize))
+	summaryContent, err := provider.ChatForSummarization(messagesToSummarize, summarizationPrompt, model, req.Temperature)
+	if err != nil {
+		log.Printf("[SUMMARIZE] Error from LLM: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(SummarizeResponse{
+			Error: err.Error(),
+		})
+		return
+	}
+
+	log.Printf("[SUMMARIZE] Generated summary: %s", summaryContent)
+
+	// Create new summary in database
+	summary, err := db.CreateSummary(convID, summaryContent, lastMessageID)
+	if err != nil {
+		log.Printf("[SUMMARIZE] Error creating summary: %v", err)
+		http.Error(w, "Error saving summary", http.StatusInternalServerError)
+		return
+	}
+
+	// Update conversation to use this new summary
+	if err := db.UpdateConversationActiveSummary(convID, summary.ID); err != nil {
+		log.Printf("[SUMMARIZE] Error updating active summary: %v", err)
+		http.Error(w, "Error updating conversation", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SummarizeResponse{
+		Summary:             summaryContent,
+		SummarizedUpToMsgID: *lastMessageID,
+		ConversationID:      convID,
+	})
+}
+
+// GetConversationSummariesHandler retrieves all summaries for a conversation
+func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.Context().Value(auth.UserContextKey).(string)
+	convID := r.PathValue("id")
+	log.Printf("Get summaries request from user: %s for conversation: %s", username, convID)
+
+	// Get user from database
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		log.Printf("[SUMMARIES] Error getting user: %v", err)
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Get conversation and verify ownership
+	conversation, err := db.GetConversation(convID)
+	if err != nil {
+		log.Printf("[SUMMARIES] Error getting conversation: %v", err)
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify user owns this conversation
+	if conversation.UserID != user.ID {
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	// Get all summaries for conversation
+	summaries, err := db.GetAllSummaries(convID)
+	if err != nil {
+		log.Printf("[SUMMARIES] Error getting summaries: %v", err)
+		http.Error(w, "Error retrieving summaries", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	summaryData := make([]SummaryData, 0, len(summaries))
+	for _, summary := range summaries {
+		upToMsgID := ""
+		if summary.SummarizedUpToMessageID != nil {
+			upToMsgID = *summary.SummarizedUpToMessageID
+		}
+		summaryData = append(summaryData, SummaryData{
+			ID:                      summary.ID,
+			SummaryContent:          summary.SummaryContent,
+			SummarizedUpToMessageID: upToMsgID,
+			UsageCount:              summary.UsageCount,
+			CreatedAt:               summary.CreatedAt.String(),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SummariesResponse{
+		Summaries: summaryData,
 	})
 }

@@ -2,7 +2,7 @@
 
 A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter LLM API integration.
 
-**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **temperature control**, **structured response formats (JSON/XML)** with visual rendering
+**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **temperature control**, **structured response formats (JSON/XML)** with visual rendering, **conversation summarization** with progressive re-summarization
 
 ## Quick Start
 
@@ -59,6 +59,8 @@ OpenRouter LLM (External)
 - `GET /api/conversations` → `{conversations: [{id, title, response_format, response_schema, ...}, ...]}`
 - `GET /api/conversations/{id}/messages` → `{messages: [{role, content, model, temperature, ...}, ...]}`
 - `DELETE /api/conversations/{id}` → `{success: boolean}`
+- `POST /api/conversations/{id}/summarize` → `{model?, temperature?}` → `{summary, summarized_up_to_message_id, conversation_id}`
+- `GET /api/conversations/{id}/summaries` → `{summaries: [{id, summary_content, summarized_up_to_message_id, usage_count, created_at}, ...]}`
 
 **CORS**: All endpoints support Cross-Origin requests from any origin (frontend can call backend from browser)
 
@@ -191,18 +193,25 @@ Available models are configured in `backend/config/models.json`:
    - **System Prompt** (text mode only): Customize AI behavior
    - **Schema** (JSON/XML only): Define structure before first message
 4. **Chat**: Type message → AI streams response in real-time
-5. **Theme**: Toggle 🌙/☀️ button for dark/light mode
-6. **Conversations**: Auto-saved with format locked after first message
-7. **Model & Temperature Display**: Each AI response shows which model and temperature were used
-8. **Logout**: Click logout button (all data persisted)
+5. **Summarize** (📝): Click to create conversation summary
+   - First summary: Summarizes entire conversation history
+   - After 2+ uses: Creates new summary by re-summarizing (old summary + new messages)
+   - Summaries shown in collapsible sections in chat history
+   - Future messages use summary as context instead of full history
+6. **Theme**: Toggle 🌙/☀️ button for dark/light mode
+7. **Conversations**: Auto-saved with format locked after first message
+8. **Model & Temperature Display**: Each AI response shows which model and temperature were used
+9. **Logout**: Click logout button (all data persisted)
 
 ## Tech Stack
 
-**Backend**: Go 1.25.3, PostgreSQL 13, jwt-go, bcrypt, google/uuid
+**Backend**: Go 1.25.3, PostgreSQL 13 (with conversation_summaries table), jwt-go, bcrypt, google/uuid
 **Frontend**: React 18, TypeScript, react-markdown, remark-gfm
 **Deployment**: Docker, Docker Compose
 
 **IDs**: All database IDs use UUID (Universally Unique Identifiers) for better distributed system support and collision resistance
+
+**Database Tables**: users, conversations (with active_summary_id), messages (with model/temperature), conversation_summaries (with usage_count tracking)
 
 ## Features
 
@@ -232,7 +241,14 @@ Available models are configured in `backend/config/models.json`:
 - **Schema Validation**: Define JSON/XML schemas for structured responses
 - **Visual Rendering**: Hierarchical tree structures for both JSON and XML with unlimited nesting support
 - **Format Locking**: Response format cannot be changed after conversation starts
-- **Database**: PostgreSQL persistence with format/schema/temperature stored per conversation/message
+- **Conversation Summarization**:
+  - **Manual trigger**: Click 📝 button to summarize conversation
+  - **Progressive re-summarization**: After summary is used 2+ times, creates new summary from (old summary + new messages)
+  - **Context replacement**: Summary replaces full message history in LLM context
+  - **Visual indicators**: Collapsible `<details>` sections show summary content in chat
+  - **Multi-summary support**: Tracks multiple summaries per conversation over time
+  - **Persistence**: All summaries stored in database with usage count tracking
+- **Database**: PostgreSQL persistence with format/schema/temperature/summaries stored per conversation/message
 - **Security**: JWT validation, CORS, API key management
 
 ## Project Structure

@@ -101,6 +101,10 @@ func main() {
 	mux.HandleFunc("OPTIONS /api/conversations/{id}/messages", corsHandler)
 	mux.HandleFunc("DELETE /api/conversations/{id}", enableCORS(auth.AuthMiddleware(chatHandler.DeleteConversationHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations/{id}", corsHandler)
+	mux.HandleFunc("POST /api/conversations/{id}/summarize", enableCORS(auth.AuthMiddleware(chatHandler.SummarizeConversationHandler)))
+	mux.HandleFunc("OPTIONS /api/conversations/{id}/summarize", corsHandler)
+	mux.HandleFunc("GET /api/conversations/{id}/summaries", enableCORS(auth.AuthMiddleware(chatHandler.GetConversationSummariesHandler)))
+	mux.HandleFunc("OPTIONS /api/conversations/{id}/summaries", corsHandler)
 
 	log.Printf("Server starting on port %s", port)
 	log.Printf("Health check: http://localhost:%s/api/health", port)

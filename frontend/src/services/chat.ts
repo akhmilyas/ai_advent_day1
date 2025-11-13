@@ -16,6 +16,7 @@ export interface Conversation {
   title: string;
   response_format: string;
   response_schema: string;
+  summarized_up_to_message_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -247,5 +248,54 @@ export class ChatService {
 
     const data = await response.json();
     return data.models || [];
+  }
+
+  async summarizeConversation(conversationId: string, model?: string, temperature?: number): Promise<{ summary: string; summarized_up_to_message_id: string }> {
+    const payload: any = {};
+    if (model) {
+      payload.model = model;
+    }
+    if (temperature !== undefined) {
+      payload.temperature = temperature;
+    }
+
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}/summarize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...AuthService.getAuthHeader(),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to summarize conversation');
+    }
+
+    const data = await response.json();
+    return {
+      summary: data.summary,
+      summarized_up_to_message_id: data.summarized_up_to_message_id,
+    };
+  }
+
+  async getConversationSummaries(conversationId: string): Promise<Array<{ upToMessageId: string; content: string }>> {
+    const response = await fetch(`${API_URL}/api/conversations/${conversationId}/summaries`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...AuthService.getAuthHeader(),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversation summaries');
+    }
+
+    const data = await response.json();
+    return (data.summaries || []).map((s: any) => ({
+      upToMessageId: s.summarized_up_to_message_id,
+      content: s.summary_content,
+    }));
   }
 }
