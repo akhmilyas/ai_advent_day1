@@ -28,6 +28,9 @@ COPY --from=builder /app/server .
 # Copy the config directory
 COPY --from=builder /app/config ./backend/config
 
+# Copy migrations directory
+COPY --from=builder /app/migrations ./migrations
+
 # Copy War and Peace text file from root context
 COPY warandpeace.txt ./warandpeace.txt
 
