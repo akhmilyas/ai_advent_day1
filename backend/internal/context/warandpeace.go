@@ -1,8 +1,8 @@
 package context
 
 import (
+	"chat-app/internal/logger"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 )
@@ -22,7 +22,7 @@ func LoadWarAndPeace(filepath string) error {
 			return
 		}
 		warAndPeaceText = string(data)
-		log.Printf("[Context] Loaded War and Peace text: %.2f MB", float64(len(data))/1024/1024)
+		logger.Log.WithField("size_mb", float64(len(data))/1024/1024).Info("Loaded War and Peace text")
 	})
 	return err
 }

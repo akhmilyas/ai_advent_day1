@@ -8,6 +8,9 @@ type LLMProvider interface {
 	// ChatWithHistoryStream sends a chat request with conversation history and streams the response
 	ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error)
 
+	// ChatForSummarization creates a summary using a custom system prompt (no default prompt)
+	ChatForSummarization(messages []Message, summarizationPrompt string, modelOverride string, temperature *float64) (string, error)
+
 	// FetchGenerationCost fetches cost information for a generation (if supported)
 	FetchGenerationCost(generationID string) (*GenerationData, error)
 

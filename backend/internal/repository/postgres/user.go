@@ -1,26 +1,20 @@
-package db
+package postgres
 
 import (
+	"chat-app/internal/logger"
+	"chat-app/internal/repository/db"
 	"database/sql"
 	"fmt"
-	"log"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // User represents a user in the database
-type User struct {
-	ID           string
-	Username     string
-	Email        string
-	PasswordHash string
-	CreatedAt    string
-}
-
 // CreateUser creates a new user with hashed password
-func CreateUser(username, email, password string) (*User, error) {
-	db := GetDB()
+func (p *PostgresDB) CreateUser(username, email, password string) (*db.User, error) {
+	conn := p.conn
 
 	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -37,7 +31,7 @@ func CreateUser(username, email, password string) (*User, error) {
 	RETURNING id, created_at
 	`
 
-	err = db.QueryRow(query, userID, username, email, string(hashedPassword)).Scan(&userID, &createdAt)
+	err = conn.QueryRow(query, userID, username, email, string(hashedPassword)).Scan(&userID, &createdAt)
 	if err != nil {
 		if err.Error() == "pq: duplicate key value violates unique constraint \"users_username_key\"" {
 			return nil, fmt.Errorf("username already exists")
@@ -45,9 +39,9 @@ func CreateUser(username, email, password string) (*User, error) {
 		return nil, fmt.Errorf("error creating user: %w", err)
 	}
 
-	log.Printf("[DB] Created new user: %s (id: %s)", username, userID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "user_id": userID}).Info("Created new user")
 
-	return &User{
+	return &db.User{
 		ID:        userID,
 		Username:  username,
 		Email:     email,
@@ -56,13 +50,13 @@ func CreateUser(username, email, password string) (*User, error) {
 }
 
 // GetUserByUsername retrieves a user by username
-func GetUserByUsername(username string) (*User, error) {
-	db := GetDB()
+func (p *PostgresDB) GetUserByUsername(username string) (*db.User, error) {
+	conn := p.conn
 
-	var user User
+	var user db.User
 	query := `SELECT id, username, email, password_hash, created_at FROM users WHERE username = $1`
 
-	err := db.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
+	err := conn.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("user not found")
@@ -74,26 +68,26 @@ func GetUserByUsername(username string) (*User, error) {
 }
 
 // VerifyPassword checks if the provided password matches the user's hashed password
-func (u *User) VerifyPassword(password string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password))
+func VerifyPassword(user *db.User, password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 	return err == nil
 }
 
 // SeedDemoUser creates the demo user if it doesn't exist
-func SeedDemoUser() error {
+func SeedDemoUser(database db.Database) error {
 	// Check if demo user already exists
-	_, err := GetUserByUsername("demo")
+	_, err := database.GetUserByUsername("demo")
 	if err == nil {
-		log.Printf("[DB] Demo user already exists, skipping seed")
+		logger.Log.Info("Demo user already exists, skipping seed")
 		return nil
 	}
 
 	// Create demo user
-	_, err = CreateUser("demo", "demo@example.com", "demo123")
+	_, err = database.CreateUser("demo", "demo@example.com", "demo123")
 	if err != nil && err.Error() != "username already exists" {
 		return fmt.Errorf("error seeding demo user: %w", err)
 	}
 
-	log.Printf("[DB] Demo user seeded successfully")
+	logger.Log.Info("Demo user seeded successfully")
 	return nil
 }

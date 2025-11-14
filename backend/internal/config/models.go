@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 )
 
 // Model represents an available LLM model
@@ -14,31 +13,35 @@ type Model struct {
 	Tier     string `json:"tier"`
 }
 
-var availableModels []Model
+// ModelsConfig holds the available models configuration
+type ModelsConfig struct {
+	models []Model
+}
 
-// LoadModels loads the available models from the config file
-func LoadModels(configPath string) error {
+// NewModelsConfig creates a new models configuration from a file
+func NewModelsConfig(configPath string) (*ModelsConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = json.Unmarshal(data, &availableModels)
+	var models []Model
+	err = json.Unmarshal(data, &models)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &ModelsConfig{models: models}, nil
 }
 
 // GetAvailableModels returns the list of available models
-func GetAvailableModels() []Model {
-	return availableModels
+func (mc *ModelsConfig) GetAvailableModels() []Model {
+	return mc.models
 }
 
 // IsValidModel checks if a model ID is in the list of available models
-func IsValidModel(modelID string) bool {
-	for _, model := range availableModels {
+func (mc *ModelsConfig) IsValidModel(modelID string) bool {
+	for _, model := range mc.models {
 		if model.ID == modelID {
 			return true
 		}
@@ -46,7 +49,11 @@ func IsValidModel(modelID string) bool {
 	return false
 }
 
-// GetDefaultModelPath returns the default path to the models config file
-func GetDefaultModelPath() string {
-	return filepath.Join("backend", "config", "models.json")
+// GetDefaultModel returns the first model as the default
+func (mc *ModelsConfig) GetDefaultModel() string {
+	if len(mc.models) > 0 {
+		return mc.models[0].ID
+	}
+	// Fallback in case no models are configured (shouldn't happen)
+	return "meta-llama/llama-3.3-8b-instruct:free"
 }

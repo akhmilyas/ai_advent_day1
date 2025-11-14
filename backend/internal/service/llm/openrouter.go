@@ -4,25 +4,32 @@ import (
 	"bufio"
 	"bytes"
 	"chat-app/internal/config"
+	"chat-app/internal/logger"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
 const openRouterGenerationURL = "https://openrouter.ai/api/v1/generation"
 
 // OpenRouterProvider implements LLMProvider using direct OpenRouter API calls
-type OpenRouterProvider struct{}
+type OpenRouterProvider struct {
+	config *config.LLMConfig
+	models *config.ModelsConfig
+}
 
-// NewOpenRouterProvider creates a new OpenRouter provider instance
-func NewOpenRouterProvider() *OpenRouterProvider {
-	return &OpenRouterProvider{}
+// NewOpenRouterProvider creates a new OpenRouter provider with config
+func NewOpenRouterProvider(llmConfig *config.LLMConfig, modelsConfig *config.ModelsConfig) *OpenRouterProvider {
+	return &OpenRouterProvider{
+		config: llmConfig,
+		models: modelsConfig,
+	}
 }
 
 type Message struct {
@@ -70,82 +77,40 @@ type StreamChunk struct {
 	IsDone   bool
 }
 
-func GetAPIKey() string {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		fmt.Println("Warning: OPENROUTER_API_KEY environment variable not set")
-	}
-	return apiKey
+// Provider helper methods
+
+func (p *OpenRouterProvider) getAPIKey() string {
+	return p.config.OpenRouterAPIKey
 }
 
-func GetModel() string {
-	// Get the first model from config as default
-	models := config.GetAvailableModels()
-	if len(models) > 0 {
-		return models[0].ID
-	}
-	// Fallback in case no models are configured (shouldn't happen)
-	log.Println("[LLM] Warning: No models configured, using fallback")
-	return "meta-llama/llama-3.3-8b-instruct:free"
+func (p *OpenRouterProvider) getModel() string {
+	return p.models.GetDefaultModel()
 }
 
-func GetSystemPrompt() string {
-	systemPrompt := os.Getenv("OPENROUTER_SYSTEM_PROMPT")
-	if systemPrompt == "" {
-		// Default system prompt
-		systemPrompt = "You are a helpful assistant."
-	}
-	return systemPrompt
+func (p *OpenRouterProvider) getSystemPrompt() string {
+	return p.config.DefaultSystemPrompt
 }
 
-func GetTopP(format string) *float64 {
-	var envVar string
-
-	// Determine which environment variable to use based on format
+func (p *OpenRouterProvider) getTopP(format string) *float64 {
 	if format == "json" || format == "xml" {
-		envVar = "OPENROUTER_STRUCTURED_TOP_P"
-	} else {
-		envVar = "OPENROUTER_TEXT_TOP_P"
+		return &p.config.StructuredTopP
 	}
-
-	// Get value from environment
-	topPStr := os.Getenv(envVar)
-	if topPStr != "" {
-		var topP float64
-		if _, err := fmt.Sscanf(topPStr, "%f", &topP); err == nil {
-			return &topP
-		}
-	}
-
-	// Should not reach here if .env is configured, but return nil as fallback
-	return nil
+	return &p.config.TextTopP
 }
 
-func GetTopK(format string) *int {
-	var envVar string
-
-	// Determine which environment variable to use based on format
+func (p *OpenRouterProvider) getTopK(format string) *int {
 	if format == "json" || format == "xml" {
-		envVar = "OPENROUTER_STRUCTURED_TOP_K"
-	} else {
-		envVar = "OPENROUTER_TEXT_TOP_K"
+		return &p.config.StructuredTopK
 	}
-
-	// Get value from environment
-	topKStr := os.Getenv(envVar)
-	if topKStr != "" {
-		var topK int
-		if _, err := fmt.Sscanf(topKStr, "%d", &topK); err == nil {
-			return &topK
-		}
-	}
-
-	// Should not reach here if .env is configured, but return nil as fallback
-	return nil
+	return &p.config.TextTopK
 }
 
-func buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
-	systemPrompt := GetSystemPrompt()
+func (p *OpenRouterProvider) getSummarizationPrompt() string {
+	return p.config.SummarizationPrompt
+}
+
+func (p *OpenRouterProvider) buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
+	systemPrompt := p.getSystemPrompt()
 
 	// If custom prompt is provided, append it to the default system prompt
 	if customPrompt != "" {
@@ -153,7 +118,7 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 	}
 
 	// Log the final system prompt
-	log.Printf("[LLM] System prompt (length: %d): %s", len(systemPrompt), systemPrompt)
+	logger.Log.WithField("prompt_length", len(systemPrompt)).Debug("Using system prompt")
 
 	// Prepend system message to the conversation history
 	return append([]Message{{Role: "system", Content: systemPrompt}}, messages...)
@@ -163,7 +128,7 @@ func buildMessagesWithHistory(messages []Message, customPrompt string) []Message
 // Used for summarization where we don't want the default system prompt
 func buildMessagesWithCustomSystemPrompt(messages []Message, customPrompt string) []Message {
 	// Log the system prompt
-	log.Printf("[LLM] Using custom-only system prompt (length: %d): %s", len(customPrompt), customPrompt)
+	logger.Log.WithField("prompt_length", len(customPrompt)).Debug("Using custom-only system prompt")
 
 	// Prepend system message to the conversation history
 	return append([]Message{{Role: "system", Content: customPrompt}}, messages...)
@@ -171,31 +136,36 @@ func buildMessagesWithCustomSystemPrompt(messages []Message, customPrompt string
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
 func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (string, error) {
-	apiKey := GetAPIKey()
+	apiKey := p.getAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := modelOverride
 	if model == "" {
-		model = GetModel()
+		model = p.getModel()
 	}
 
 	tempStr := "nil"
 	if temperature != nil {
 		tempStr = fmt.Sprintf("%.2f", *temperature)
 	}
-	log.Printf("[LLM] Calling OpenRouter API with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
+	logger.Log.WithFields(logrus.Fields{
+		"model": model,
+		"format": format,
+		"temperature": tempStr,
+		"message_count": len(messages),
+	}).Info("Calling OpenRouter API")
 
-	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
+	messagesWithHistory := p.buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      false,
 		Temperature: temperature,
-		TopP:        GetTopP(format),
-		TopK:        GetTopK(format),
+		TopP:        p.getTopP(format),
+		TopK:        p.getTopK(format),
 		Provider: &Provider{
 			RequireParameters: false,
 		},
@@ -233,7 +203,7 @@ func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPro
 		return "", fmt.Errorf("error reading response body: %w", err)
 	}
 
-	log.Printf("[LLM] Raw response body: %s", string(body))
+	logger.Log.WithField("response_length", len(body)).Debug("Received raw response")
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
@@ -245,27 +215,31 @@ func (p *OpenRouterProvider) ChatWithHistory(messages []Message, customSystemPro
 	}
 
 	content := chatResp.Choices[0].Message.Content
-	log.Printf("[LLM] Extracted content length: %d", len(content))
+	logger.Log.WithField("content_length", len(content)).Debug("Extracted content from response")
 	return content, nil
 }
 
 // ChatForSummarization sends a chat request for summarization with ONLY the custom prompt (no default system prompt)
 func (p *OpenRouterProvider) ChatForSummarization(messages []Message, summarizationPrompt string, modelOverride string, temperature *float64) (string, error) {
-	apiKey := GetAPIKey()
+	apiKey := p.getAPIKey()
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := modelOverride
 	if model == "" {
-		model = GetModel()
+		model = p.getModel()
 	}
 
 	tempStr := "nil"
 	if temperature != nil {
 		tempStr = fmt.Sprintf("%.2f", *temperature)
 	}
-	log.Printf("[LLM] Calling OpenRouter API for summarization with model: %s, temperature: %s, message history count: %d", model, tempStr, len(messages))
+	logger.Log.WithFields(logrus.Fields{
+		"model": model,
+		"temperature": tempStr,
+		"message_count": len(messages),
+	}).Info("Calling OpenRouter API for summarization")
 
 	messagesWithHistory := buildMessagesWithCustomSystemPrompt(messages, summarizationPrompt)
 
@@ -274,8 +248,8 @@ func (p *OpenRouterProvider) ChatForSummarization(messages []Message, summarizat
 		Messages:    messagesWithHistory,
 		Stream:      false,
 		Temperature: temperature,
-		TopP:        GetTopP("text"),
-		TopK:        GetTopK("text"),
+		TopP:        p.getTopP("text"),
+		TopK:        p.getTopK("text"),
 		Provider: &Provider{
 			RequireParameters: false,
 		},
@@ -313,7 +287,7 @@ func (p *OpenRouterProvider) ChatForSummarization(messages []Message, summarizat
 		return "", fmt.Errorf("error reading response body: %w", err)
 	}
 
-	log.Printf("[LLM] Raw summarization response body: %s", string(body))
+	logger.Log.WithField("response_length", len(body)).Debug("Received raw summarization response")
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
@@ -325,37 +299,42 @@ func (p *OpenRouterProvider) ChatForSummarization(messages []Message, summarizat
 	}
 
 	content := chatResp.Choices[0].Message.Content
-	log.Printf("[LLM] Extracted summarization content length: %d", len(content))
+	logger.Log.WithField("content_length", len(content)).Debug("Extracted summarization content")
 	return content, nil
 }
 
 // ChatWithHistoryStream sends a chat request with conversation history and streams the response
 func (p *OpenRouterProvider) ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error) {
-	apiKey := GetAPIKey()
+	apiKey := p.getAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	model := modelOverride
 	if model == "" {
-		model = GetModel()
+		model = p.getModel()
 	}
 
 	tempStr := "nil"
 	if temperature != nil {
 		tempStr = fmt.Sprintf("%.2f", *temperature)
 	}
-	log.Printf("[LLM] Calling OpenRouter API (streaming) with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
+	logger.Log.WithFields(logrus.Fields{
+		"model": model,
+		"format": format,
+		"temperature": tempStr,
+		"message_count": len(messages),
+	}).Info("Calling OpenRouter API (streaming)")
 
-	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
+	messagesWithHistory := p.buildMessagesWithHistory(messages, customSystemPrompt)
 
 	reqBody := ChatRequest{
 		Model:       model,
 		Messages:    messagesWithHistory,
 		Stream:      true,
 		Temperature: temperature,
-		TopP:        GetTopP(format),
-		TopK:        GetTopK(format),
+		TopP:        p.getTopP(format),
+		TopK:        p.getTopK(format),
 		Provider: &Provider{
 			RequireParameters: false,
 		},
@@ -414,28 +393,31 @@ func (p *OpenRouterProvider) ChatWithHistoryStream(messages []Message, customSys
 
 				var streamResp ChatResponse
 				if err := json.Unmarshal([]byte(jsonStr), &streamResp); err != nil {
-					log.Printf("[LLM] Error parsing stream chunk: %v", err)
+					logger.Log.WithError(err).Warn("Error parsing stream chunk")
 					continue
 				}
 
 				// Capture generation ID if present
 				if streamResp.ID != "" && generationID == "" {
 					generationID = streamResp.ID
-					log.Printf("[LLM] Captured generation ID: %s", generationID)
+					logger.Log.WithField("generation_id", generationID).Debug("Captured generation ID")
 				}
 
 				// Capture usage data if present (sent at end with empty choices)
 				if streamResp.Usage != nil {
 					usage = streamResp.Usage
-					log.Printf("[LLM] Captured usage: prompt=%d, completion=%d, total=%d",
-						usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+					logger.Log.WithFields(logrus.Fields{
+					"prompt_tokens": usage.PromptTokens,
+					"completion_tokens": usage.CompletionTokens,
+					"total_tokens": usage.TotalTokens,
+				}).Debug("Captured usage data")
 				}
 
 				// Extract content from delta field (streaming responses use delta)
 				if len(streamResp.Choices) > 0 && streamResp.Choices[0].Delta.Content != "" {
 					chunk := streamResp.Choices[0].Delta.Content
 					chunks <- StreamChunk{Content: chunk}
-					log.Printf("[LLM] Stream chunk: %q", chunk)
+					logger.Log.WithField("chunk_length", len(chunk)).Debug("Stream chunk received")
 				}
 			}
 		}
@@ -449,11 +431,11 @@ func (p *OpenRouterProvider) ChatWithHistoryStream(messages []Message, customSys
 				},
 				IsDone: true,
 			}
-			log.Printf("[LLM] Sent final metadata chunk")
+			logger.Log.Debug("Sent final metadata chunk")
 		}
 
 		if err := scanner.Err(); err != nil {
-			log.Printf("[LLM] Scanner error: %v", err)
+			logger.Log.WithError(err).Error("Scanner error during streaming")
 		}
 	}()
 
@@ -483,7 +465,7 @@ func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*Generati
 		return nil, fmt.Errorf("generation ID is empty")
 	}
 
-	apiKey := GetAPIKey()
+	apiKey := p.getAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
@@ -498,11 +480,11 @@ func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*Generati
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := baseDelay * time.Duration(1<<uint(attempt-1)) // Exponential: 500ms, 1s, 2s
-			log.Printf("[LLM] Retrying cost fetch in %v (attempt %d/%d)", delay, attempt+1, maxRetries)
+			logger.Log.WithFields(logrus.Fields{"delay": delay, "attempt": attempt+1, "max_retries": maxRetries}).Info("Retrying cost fetch")
 			time.Sleep(delay)
 		}
 
-		log.Printf("[LLM] Fetching generation cost from: %s (attempt %d/%d)", url, attempt+1, maxRetries)
+		logger.Log.WithFields(logrus.Fields{"url": url, "attempt": attempt+1, "max_retries": maxRetries}).Debug("Fetching generation cost")
 
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
@@ -522,7 +504,7 @@ func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*Generati
 		resp.Body.Close()
 
 		// Log raw response for debugging
-		log.Printf("[LLM] Raw generation API response (status %d): %s", resp.StatusCode, string(body))
+		logger.Log.WithFields(logrus.Fields{"status_code": resp.StatusCode, "response_length": len(body)}).Debug("Raw generation API response")
 
 		if resp.StatusCode == http.StatusNotFound {
 			// 404 means data not ready yet, retry
@@ -538,9 +520,13 @@ func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*Generati
 			return nil, fmt.Errorf("error decoding response: %w", err)
 		}
 
-		log.Printf("[LLM] Generation - cost: $%.6f, native_tokens: prompt=%d, completion=%d, latency: %dms, generation_time: %dms",
-			genResp.Data.TotalCost, genResp.Data.NativeTokensPrompt, genResp.Data.NativeTokensCompletion,
-			genResp.Data.Latency, genResp.Data.GenerationTime)
+		logger.Log.WithFields(logrus.Fields{
+			"cost":              genResp.Data.TotalCost,
+			"prompt_tokens":     genResp.Data.NativeTokensPrompt,
+			"completion_tokens": genResp.Data.NativeTokensCompletion,
+			"latency_ms":        genResp.Data.Latency,
+			"generation_time_ms": genResp.Data.GenerationTime,
+		}).Info("Fetched generation cost data")
 
 		return &genResp.Data, nil
 	}
@@ -550,5 +536,5 @@ func (p *OpenRouterProvider) FetchGenerationCost(generationID string) (*Generati
 
 // GetDefaultModel returns the default model for OpenRouter provider
 func (p *OpenRouterProvider) GetDefaultModel() string {
-	return GetModel()
+	return p.getModel()
 }
