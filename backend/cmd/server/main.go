@@ -59,7 +59,7 @@ func main() {
 	// Initialize application config with database and centralized config
 	appConfiguration := app.NewConfig(database, appConfig)
 
-	// Create chat handlers with dependency injection
+	// Create chat handlers with dependency injection (using service layer)
 	chatHandler := handlers.NewChatHandlers(appConfiguration)
 
 	// Create new ServeMux to use Go 1.22+ routing features for path parameters
