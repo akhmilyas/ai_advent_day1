@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 import { ChatService, Model } from '../services/chat';
+import { ProviderSelector } from './Settings/ProviderSelector';
+import { WarAndPeaceSettings } from './Settings/WarAndPeaceSettings';
+import { ModelSettings } from './Settings/ModelSettings';
+import { FormatSettings } from './Settings/FormatSettings';
+import { PromptSettings } from './Settings/PromptSettings';
 
 export type ResponseFormat = 'text' | 'json' | 'xml';
 export type ProviderType = 'openrouter' | 'genkit';
@@ -164,253 +169,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div style={styles.content}>
-          {/* Provider Selector */}
-          <div style={styles.providerSection}>
-            <label style={styles.label}>
-              LLM Provider
-              <p style={styles.description}>
-                Choose between direct OpenRouter API or Genkit framework.
-              </p>
-            </label>
-            <div style={styles.providerToggle}>
-              <label style={{
-                ...styles.providerOption,
-                ...(tempProvider === 'openrouter' ? styles.providerOptionActive : {}),
-              }}>
-                <input
-                  type="radio"
-                  name="provider"
-                  value="openrouter"
-                  checked={tempProvider === 'openrouter'}
-                  onChange={(e) => setTempProvider(e.target.value as ProviderType)}
-                  style={styles.radio}
-                />
-                <span>OpenRouter (Direct API)</span>
-              </label>
-              <label style={{
-                ...styles.providerOption,
-                ...(tempProvider === 'genkit' ? styles.providerOptionActive : {}),
-              }}>
-                <input
-                  type="radio"
-                  name="provider"
-                  value="genkit"
-                  checked={tempProvider === 'genkit'}
-                  onChange={(e) => setTempProvider(e.target.value as ProviderType)}
-                  style={styles.radio}
-                />
-                <span>Genkit (Firebase Framework)</span>
-              </label>
-            </div>
-          </div>
+          <ProviderSelector
+            provider={tempProvider}
+            onProviderChange={setTempProvider}
+            styles={styles}
+          />
 
-          {/* War and Peace Context Toggle */}
-          <div style={styles.warAndPeaceSection}>
-            <label style={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={useWarAndPeace}
-                onChange={(e) => onUseWarAndPeaceChange(e.target.checked)}
-                style={styles.checkbox}
-              />
-              <div>
-                <span style={styles.checkboxText}>Add War and Peace context</span>
-                <p style={styles.description}>
-                  Appends the full text of "War and Peace" by Leo Tolstoy to the system prompt (3.2 MB).
-                  This provides extensive Russian literature context to the AI.
-                </p>
-              </div>
-            </label>
+          <WarAndPeaceSettings
+            useWarAndPeace={useWarAndPeace}
+            warAndPeacePercent={tempWarAndPeacePercent}
+            onUseWarAndPeaceChange={onUseWarAndPeaceChange}
+            onWarAndPeacePercentChange={setTempWarAndPeacePercent}
+            styles={styles}
+          />
 
-            {/* Percentage Slider - only show when War and Peace is enabled */}
-            {useWarAndPeace && (
-              <div style={styles.percentageSliderSection}>
-                <label style={styles.label}>
-                  Context Size: {tempWarAndPeacePercent}%
-                  <p style={styles.description}>
-                    Controls what percentage of the War and Peace text to include (from the beginning).
-                  </p>
-                </label>
-                <input
-                  type="range"
-                  min="1"
-                  max="100"
-                  step="1"
-                  value={tempWarAndPeacePercent}
-                  onChange={(e) => setTempWarAndPeacePercent(parseInt(e.target.value))}
-                  style={styles.slider}
-                />
-                <div style={styles.sliderLabels}>
-                  <span style={styles.sliderLabel}>1% (~32 KB)</span>
-                  <span style={styles.sliderLabel}>50% (~1.6 MB)</span>
-                  <span style={styles.sliderLabel}>100% (~3.2 MB)</span>
-                </div>
-              </div>
-            )}
-          </div>
+          <ModelSettings
+            selectedModel={tempModel}
+            availableModels={availableModels}
+            temperature={tempTemperature}
+            onModelChange={setTempModel}
+            onTemperatureChange={setTempTemperature}
+            styles={styles}
+          />
 
-          {/* Model Selector */}
-          <div style={styles.modelSection}>
-            <label style={styles.label}>
-              AI Model
-              <p style={styles.description}>
-                Select which AI model to use for generating responses.
-              </p>
-            </label>
-            <select
-              value={tempModel}
-              onChange={(e) => setTempModel(e.target.value)}
-              style={styles.select}
-            >
-              {availableModels.length === 0 && (
-                <option value="">Loading models...</option>
-              )}
-              {availableModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name} ({model.provider})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Temperature Slider */}
-          <div style={styles.temperatureSection}>
-            <label style={styles.label}>
-              Temperature: {tempTemperature.toFixed(2)}
-              <p style={styles.description}>
-                Controls randomness: Lower values (0.0-0.5) = more focused and deterministic, Higher values (0.5-2.0) = more creative and random.
-              </p>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.01"
-              value={tempTemperature}
-              onChange={(e) => setTempTemperature(parseFloat(e.target.value))}
-              style={styles.slider}
-            />
-            <div style={styles.sliderLabels}>
-              <span style={styles.sliderLabel}>0.0 (Focused)</span>
-              <span style={styles.sliderLabel}>1.0 (Balanced)</span>
-              <span style={styles.sliderLabel}>2.0 (Creative)</span>
-            </div>
-          </div>
-
-          {/* Locked Configuration Info */}
-          {isExistingConversation && (
-            <div style={styles.infoBox}>
-              <p style={styles.infoText}>
-                <strong>🔒 Locked Configuration</strong>
-              </p>
-              <p style={styles.infoText}>
-                This conversation is using <strong>{displayFormat.toUpperCase()}</strong> format.
-                The response format cannot be changed after a conversation has started.
-              </p>
-            </div>
-          )}
-
-          {/* Only show radio buttons for new conversations */}
-          {!isExistingConversation && (
-            <>
-              <label style={styles.label}>
-                Response Format
-                <p style={styles.description}>
-                  Choose how the AI should format its responses.
-                </p>
-              </label>
-              <div style={styles.radioGroup}>
-                <label style={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    name="responseFormat"
-                    value="text"
-                    checked={displayFormat === 'text'}
-                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                    style={styles.radio}
-                  />
-                  <span>Plain Text (Default)</span>
-                </label>
-                <label style={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    name="responseFormat"
-                    value="json"
-                    checked={displayFormat === 'json'}
-                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                    style={styles.radio}
-                  />
-                  <span>JSON</span>
-                </label>
-                <label style={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    name="responseFormat"
-                    value="xml"
-                    checked={displayFormat === 'xml'}
-                    onChange={(e) => setTempFormat(e.target.value as ResponseFormat)}
-                    style={styles.radio}
-                  />
-                  <span>XML</span>
-                </label>
-              </div>
-            </>
-          )}
-
-          {/* Schema Display/Input for JSON/XML */}
-          {(displayFormat === 'json' || displayFormat === 'xml') && (
-            <div style={styles.schemaSection}>
-              <label style={styles.label}>
-                Response Schema {isExistingConversation ? '' : '(Required)'}
-                <p style={styles.description}>
-                  {isExistingConversation
-                    ? `Schema for this ${displayFormat.toUpperCase()} conversation:`
-                    : `Define the structure for the ${displayFormat.toUpperCase()} response. This schema will be used to instruct the AI on the exact format to follow.`}
-                </p>
-              </label>
-              <textarea
-                value={displaySchema}
-                onChange={(e) => setTempSchema(e.target.value)}
-                placeholder={`Enter ${displayFormat.toUpperCase()} schema example...`}
-                style={{
-                  ...styles.textarea,
-                  ...(isExistingConversation ? styles.textareaReadonly : {}),
-                }}
-                disabled={isExistingConversation}
-                readOnly={isExistingConversation}
-              />
-            </div>
-          )}
+          <FormatSettings
+            displayFormat={displayFormat}
+            displaySchema={displaySchema}
+            isExistingConversation={isExistingConversation}
+            onFormatChange={setTempFormat}
+            onSchemaChange={setTempSchema}
+            styles={styles}
+          />
 
           {/* System Prompt (only for text format) */}
           {displayFormat === 'text' && (
-            <>
-              <label style={styles.label}>
-                System Prompt
-                <p style={styles.description}>
-                  This prompt will be combined with the default system prompt to guide the AI's behavior.
-                </p>
-              </label>
-
-              {systemPrompt && (
-                <div style={styles.currentPromptSection}>
-                  <p style={styles.currentPromptLabel}>Current System Prompt:</p>
-                  <div style={styles.currentPromptDisplay}>
-                    {systemPrompt}
-                  </div>
-                </div>
-              )}
-
-              <label style={styles.editLabel}>
-                {systemPrompt ? 'Edit System Prompt' : 'Enter System Prompt'}
-              </label>
-              <textarea
-                value={tempPrompt}
-                onChange={(e) => setTempPrompt(e.target.value)}
-                placeholder="Enter your custom system prompt..."
-                style={styles.textarea}
-              />
-            </>
+            <PromptSettings
+              systemPrompt={systemPrompt}
+              tempPrompt={tempPrompt}
+              onPromptChange={setTempPrompt}
+              styles={styles}
+            />
           )}
         </div>
 

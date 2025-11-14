@@ -5,7 +5,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
 import { SettingsModal, ResponseFormat, ProviderType } from './SettingsModal';
 import { Sidebar } from './Sidebar';
-import { Message } from './Message';
+import { ChatHeader } from './Chat/ChatHeader';
+import { ChatMessages } from './Chat/ChatMessages';
+import { ChatInput } from './Chat/ChatInput';
 
 interface ChatMessage {
   id?: string;
@@ -26,7 +28,7 @@ interface ChatProps {
 }
 
 export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
-  const { theme, toggleTheme } = useTheme();
+  const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -385,182 +387,30 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         currentConversationId={conversationId}
       />
       <div style={{ ...styles.container, backgroundColor: colors.background }}>
-        <div style={{ ...styles.header, backgroundColor: colors.header, borderBottomColor: colors.border }}>
-          <div>
-            <h2 style={{ ...styles.title, color: colors.text }}>
-              {conversationTitle || 'AI Chat'}
-            </h2>
-            <div style={styles.headerInfo}>
-              {model && <p style={{ ...styles.modelLabel, color: colors.textSecondary }}>{model}</p>}
-              {conversationFormat && conversationFormat !== 'text' && (
-                <p style={{ ...styles.formatLabel, color: colors.textSecondary }}>
-                  Format: <strong style={{ color: colors.text }}>{conversationFormat.toUpperCase()}</strong>
-                </p>
-              )}
-            </div>
-          </div>
-        <div style={styles.buttonGroup}>
-          {conversationId && messages.length > 0 && (
-            <button
-              onClick={handleSummarize}
-              disabled={summarizing}
-              style={{
-                ...styles.themeButton,
-                backgroundColor: summarizing ? colors.border : colors.surface,
-                color: colors.text,
-                border: `1px solid ${colors.border}`,
-                opacity: summarizing ? 0.6 : 1,
-                cursor: summarizing ? 'wait' : 'pointer',
-              }}
-              title={summarizing ? 'Summarizing...' : 'Summarize conversation'}
-            >
-              {summarizing ? '⏳' : '📝'}
-            </button>
-          )}
-          <button
-            onClick={toggleTheme}
-            style={{
-              ...styles.themeButton,
-              backgroundColor: colors.surface,
-              color: colors.text,
-              border: `1px solid ${colors.border}`,
-            }}
-            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-          >
-            {theme === 'light' ? '🌙' : '☀️'}
-          </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            style={{
-              ...styles.themeButton,
-              backgroundColor: colors.surface,
-              color: colors.text,
-              border: `1px solid ${colors.border}`,
-            }}
-            title="Settings"
-          >
-            ⚙️
-          </button>
-          <button
-            onClick={handleLogout}
-            style={{
-              ...styles.logoutButton,
-              backgroundColor: colors.buttonDanger,
-              color: colors.buttonDangerText,
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-
-      <div style={{ ...styles.messagesContainer, backgroundColor: colors.background }}>
-        {messages.length === 0 && (
-          <div style={{ ...styles.emptyState, color: colors.emptyStateText }}>
-            <p>Start a conversation by typing a message below</p>
-          </div>
-        )}
-
-        {messages.map((msg, idx) => {
-          // Find if this message is the end of a summary
-          const summaryForThisMessage = summaries.find(s => s.upToMessageId === msg.id);
-
-          return (
-            <React.Fragment key={idx}>
-              <Message
-                role={msg.role}
-                content={msg.content}
-                model={'model' in msg ? msg.model : undefined}
-                temperature={'temperature' in msg ? msg.temperature : undefined}
-                promptTokens={'promptTokens' in msg ? msg.promptTokens : undefined}
-                completionTokens={'completionTokens' in msg ? msg.completionTokens : undefined}
-                totalTokens={'totalTokens' in msg ? msg.totalTokens : undefined}
-                totalCost={'totalCost' in msg ? msg.totalCost : undefined}
-                latency={'latency' in msg ? msg.latency : undefined}
-                generationTime={'generationTime' in msg ? msg.generationTime : undefined}
-                conversationFormat={conversationFormat}
-                colors={colors}
-              />
-              {/* Show summary divider after the last summarized message */}
-              {summaryForThisMessage && (
-                <div
-                  style={{
-                    margin: '20px 0',
-                    padding: '15px',
-                    backgroundColor: colors.surface,
-                    borderRadius: '8px',
-                    border: `2px dashed ${colors.border}`,
-                    color: colors.textSecondary,
-                  }}
-                >
-                  <details>
-                    <summary style={{ cursor: 'pointer', fontStyle: 'italic', userSelect: 'none' }}>
-                      📋 Messages above have been summarized (click to view)
-                    </summary>
-                    <div style={{
-                      marginTop: '10px',
-                      padding: '10px',
-                      backgroundColor: colors.background,
-                      borderRadius: '4px',
-                      whiteSpace: 'pre-wrap',
-                      fontSize: '0.9em',
-                      color: colors.text,
-                    }}>
-                      {summaryForThisMessage.content || 'No summary content available'}
-                    </div>
-                  </details>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        })}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          ...styles.inputContainer,
-          backgroundColor: colors.header,
-          borderTopColor: colors.border,
-        }}
-      >
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            // Submit on Enter, allow new line on Shift+Enter
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (!loading && input.trim()) {
-                handleSubmit(e as any);
-              }
-            }
-          }}
-          placeholder="Type your message... (Shift+Enter for new line)"
-          style={{
-            ...styles.input,
-            backgroundColor: colors.input,
-            color: colors.text,
-            borderColor: colors.border,
-          }}
-          disabled={loading}
-          rows={1}
+        <ChatHeader
+          conversationTitle={conversationTitle}
+          model={model}
+          conversationFormat={conversationFormat}
+          showSummarizeButton={conversationId !== undefined && messages.length > 0}
+          summarizing={summarizing}
+          onSummarize={handleSummarize}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onLogout={handleLogout}
         />
-        <button
-          type="submit"
-          style={{
-            ...styles.sendButton,
-            backgroundColor: colors.buttonPrimary,
-            color: colors.buttonPrimaryText,
-            ...(loading || !input.trim() ? { backgroundColor: colors.buttonPrimaryDisabled } : {}),
-          }}
-          disabled={loading || !input.trim()}
-        >
-          Send
-        </button>
-      </form>
+
+        <ChatMessages
+          messages={messages}
+          summaries={summaries}
+          conversationFormat={conversationFormat}
+          messagesEndRef={messagesEndRef}
+        />
+
+        <ChatInput
+          value={input}
+          onChange={setInput}
+          onSubmit={handleSubmit}
+          loading={loading}
+        />
 
         <SettingsModal
           isOpen={settingsOpen}
@@ -601,104 +451,5 @@ const styles = {
     flexDirection: 'column' as const,
     flex: 1,
     transition: 'background-color 0.3s ease',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '20px',
-    borderBottom: '1px solid',
-    transition: 'background-color 0.3s ease, border-color 0.3s ease',
-  },
-  title: {
-    margin: 0,
-    transition: 'color 0.3s ease',
-  },
-  headerInfo: {
-    display: 'flex',
-    gap: '16px',
-    alignItems: 'center',
-    flexWrap: 'wrap' as const,
-  },
-  modelLabel: {
-    margin: '4px 0 0 0',
-    fontSize: '12px',
-    opacity: 0.7,
-    transition: 'color 0.3s ease',
-  },
-  formatLabel: {
-    margin: '4px 0 0 0',
-    fontSize: '12px',
-    opacity: 0.8,
-    transition: 'color 0.3s ease',
-  },
-  buttonGroup: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'center',
-  },
-  themeButton: {
-    padding: '8px 12px',
-    fontSize: '16px',
-    border: '1px solid',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    transition: 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease',
-  },
-  logoutButton: {
-    padding: '8px 16px',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    transition: 'background-color 0.3s ease',
-  },
-  messagesContainer: {
-    flex: 1,
-    overflowY: 'auto' as const,
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '16px',
-    transition: 'background-color 0.3s ease',
-  },
-  emptyState: {
-    textAlign: 'center' as const,
-    marginTop: '100px',
-    transition: 'color 0.3s ease',
-  },
-  inputContainer: {
-    display: 'flex',
-    alignItems: 'flex-end',
-    gap: '10px',
-    padding: '20px',
-    borderTop: '1px solid',
-    boxShadow: 'none',
-    transition: 'background-color 0.3s ease, border-color 0.3s ease',
-  },
-  input: {
-    flex: 1,
-    padding: '12px',
-    fontSize: '16px',
-    borderRadius: '4px',
-    border: '1px solid',
-    boxShadow: 'none !important',
-    outline: 'none',
-    minHeight: '44px',
-    maxHeight: '200px',
-    resize: 'vertical',
-    fontFamily: 'inherit',
-    lineHeight: '1.5',
-    transition: 'background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease',
-  } as React.CSSProperties,
-  sendButton: {
-    padding: '12px 24px',
-    fontSize: '16px',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    transition: 'background-color 0.3s ease',
-  },
-  sendButtonDisabled: {
-    cursor: 'not-allowed',
   },
 };
