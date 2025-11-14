@@ -1,0 +1,19 @@
+# Test stage - based on the builder stage from main Dockerfile
+FROM golang:1.25.3-alpine
+
+WORKDIR /app
+
+# Install testing tools
+RUN apk add --no-cache git
+
+# Copy go mod files
+COPY backend/go.mod backend/go.sum* ./
+
+# Copy backend source code
+COPY backend/ ./
+
+# Download and tidy dependencies
+RUN go mod download && go mod tidy
+
+# Default command runs all tests
+CMD ["go", "test", "./...", "-v", "-coverprofile=coverage.out"]
