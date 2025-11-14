@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 docker compose build      # Build both frontend and backend images
 docker compose up         # Start all services (PostgreSQL, Backend, Frontend)
 docker compose down       # Stop all services
+docker compose down -v    # Stop and remove volumes (clean database)
 ```
 
 ### Manual Backend Build & Run
@@ -37,13 +38,25 @@ cd frontend && npm test
 
 # Backend tests
 cd backend && go test ./...
-cd backend && go test ./internal/handlers -v  # Single package with verbose output
+cd backend && go test ./pkg/validation -v  # Single package with verbose output
+```
+
+### Database Migrations
+```bash
+# Check migration status
+docker compose exec postgres psql -U postgres -d chatapp -c "SELECT * FROM schema_migrations;"
+
+# Migrations auto-apply on backend startup via golang-migrate
+# Manual migration commands (if needed):
+cd backend
+migrate -path migrations -database "postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable" up
+migrate -path migrations -database "postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable" down
 ```
 
 ## Architecture Overview
 
 ### High-Level Design
-This is a fullstack chat application with three main layers:
+This is a fullstack chat application with **clean layered architecture**:
 
 1. **Frontend (React/TypeScript)** on port 3000
    - Single-page app with login/register and chat interface
@@ -51,18 +64,49 @@ This is a fullstack chat application with three main layers:
    - Client-side state: authentication tokens, theme preference, custom system prompts, selected model, temperature
    - All stored in localStorage
 
-2. **Backend (Go)** on port 8080
-   - REST API for authentication (/api/login, /api/register)
-   - REST API for model configuration (/api/models)
-   - SSE streaming endpoint for chat responses (/api/chat/stream)
-   - Middleware for JWT validation on protected routes
-   - Manages conversation history, message persistence, and model tracking
+2. **Backend (Go) - Clean Architecture** on port 8080
+   - **API Layer** (`internal/api/handlers/`): HTTP request/response, auth middleware, SSE streaming
+   - **Service Layer** (`internal/service/`): Business logic for chat, conversations, summaries, LLM providers
+   - **Repository Layer** (`internal/repository/`): Database interface abstraction with PostgreSQL implementation
+   - **Validation Layer** (`pkg/validation/`): Request validators with comprehensive test coverage
+   - **Config Layer** (`internal/config/`): Centralized configuration from environment + JSON files
 
 3. **Database (PostgreSQL)** on port 5432
-   - Four tables: users, conversations, messages, conversation_summaries
+   - Managed via **golang-migrate** (7 migrations tracked)
+   - Five tables: users, conversations, messages, conversation_summaries, schema_migrations
    - Cascading deletes for referential integrity
    - Indexes on foreign keys and frequently queried fields
-   - Summary tracking with usage count for progressive re-summarization
+   - Cost/performance tracking: prompt_tokens, completion_tokens, total_cost, latency, generation_time
+
+### Layered Backend Architecture
+
+```
+HTTP Request
+  ↓
+API Handlers (internal/api/handlers/)
+  - Authentication middleware
+  - Request parsing and validation
+  - Response formatting (JSON, SSE)
+  ↓
+Service Layer (internal/service/)
+  - ChatService: Message streaming, history management
+  - ConversationService: CRUD operations
+  - SummaryService: Summarization logic
+  - LLM Providers: OpenRouterProvider, GenkitProvider
+  ↓
+Repository Layer (internal/repository/)
+  - Interface definitions (repository.go)
+  - PostgreSQL implementation (postgres_repository.go)
+  - Database connection management
+  ↓
+PostgreSQL Database
+```
+
+**Key Benefits:**
+- **Testability**: Service and repository layers use interfaces for easy mocking
+- **Separation of Concerns**: Each layer has a single responsibility
+- **Maintainability**: Business logic isolated from HTTP and database details
+- **Flexibility**: Can swap database implementation without changing service layer
 
 ### Data Flow for Chat (Streaming)
 
@@ -71,56 +115,237 @@ User sends message
   ↓
 Frontend: ChatService.streamMessage()
   ↓
-POST /api/chat/stream {message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}
+POST /api/chat/stream {
+  message,
+  conversation_id?,
+  system_prompt?,
+  response_format?,
+  response_schema?,
+  model?,
+  temperature?,
+  provider?,              // NEW: 'openrouter' or 'genkit'
+  use_war_and_peace?,     // NEW: Enable War and Peace context injection
+  war_and_peace_percent?  // NEW: Percentage of text to append (1-100)
+}
   ↓
-Backend: ChatStreamHandler
+API Handler: ChatStreamHandler
   - Validates JWT token
-  - Validates model ID (if provided) against config
-  - Gets/creates conversation (with format/schema if new)
-  - Adds user message to DB
-  - Fetches full conversation history
-  - Builds format-specific system prompt (JSON/XML get schema instructions)
+  - Validates request via validation.ChatRequestValidator
+  - Extracts user from context
   ↓
-Backend: llm.ChatWithHistoryStream(messages, systemPrompt, format, modelOverride, temperature)
-  - Uses provided model or defaults to first model in config
+Service: ChatService.SendMessageStream()
+  - Validates model ID against config
+  - Gets/creates conversation (with format/schema if new)
+  - Adds user message to repository
+  - Fetches conversation history
+  - Checks for active summary (if exists, use summary + recent messages)
+  - Builds format-specific system prompt
+  - Appends War and Peace text if requested
+  ↓
+LLM Provider (OpenRouterProvider or GenkitProvider)
+  - Selects format-aware top_p/top_k from config
   - Uses user-provided temperature (0.0-2.0)
-  - Selects format-aware top_p and top_k from environment variables
-  - Sets provider.require_parameters: true to ensure parameter support
   - Builds message array: [system_prompt, user1, assistant1, ..., user_n]
-  - Calls OpenRouter API with selected model, temperature, top_p, top_k, and provider config
+  - Calls provider API with model, temperature, top_p, top_k
   - Streams response via SSE format (data: {chunk}\n\n)
-  - Sends model name via SSE (MODEL: model-name)
-  - Sends temperature via SSE (TEMPERATURE: 0.70)
+  - Sends metadata: MODEL:, TEMPERATURE:, CONV_ID:, USAGE:
+  ↓
+Service: Saves message to repository
+  - Records model, temperature, provider used
+  - Fetches cost/token data from OpenRouter API (async with retry)
+  - Stores prompt_tokens, completion_tokens, total_cost, latency, generation_time
   ↓
 Frontend: onChunk callback accumulates chunks
   - Unescape newlines (\\n → \n)
   - Update UI incrementally
-  - Capture model name from MODEL: event
-  - Capture temperature from TEMPERATURE: event
-  ↓
-Backend: Saves full response to DB after streaming completes (with model and temperature fields)
+  - Capture metadata from SSE events
   ↓
 Frontend: Message component renders based on format
   - text: ReactMarkdown
   - json: renderJsonAsTree() with collapsible raw view
   - xml: renderXmlAsTree() with collapsible raw view
-  - Shows model name and temperature next to "AI" label (e.g., "AI (model-name, temp: 0.70)")
+  - Shows model name, temperature, and provider next to "AI" label
 ```
 
 ### Authentication Flow
 
 - Login/Register: POST to /api/login or /api/register with credentials
-- Response: JWT token (24-hour expiration)
+- Validation: Via `validation.AuthRequestValidator` (username, email, password rules)
+- Response: JWT token (24-hour expiration, configurable via env)
 - Storage: localStorage.getItem('auth_token')
 - Protected routes: Authorization: Bearer {token} header
-- User extracted from JWT claims via context.Value(auth.UserContextKey)
+- User extracted from JWT claims via context value
+- JWT secret: **Must be 32+ characters** (validated on startup)
 
 ## Key Technical Decisions
+
+### Clean Layered Architecture (New)
+The backend follows a **service-oriented pattern** with clear separation:
+
+**API Layer** (`internal/api/handlers/`):
+- `auth_handlers.go`: Login, register endpoints
+- `chat_handlers.go`: Chat streaming, conversation management, summarization
+- `models_handlers.go`: Model configuration endpoints
+- HTTP-specific concerns only (request parsing, response formatting)
+
+**Service Layer** (`internal/service/`):
+- `chat_service.go`: Chat business logic, message streaming
+- `conversation_service.go`: Conversation CRUD operations
+- `summary_service.go`: Summarization strategies (first, progressive)
+- `openrouter_provider.go`: OpenRouter LLM integration
+- `genkit_provider.go`: Firebase Genkit integration (experimental)
+- Pure business logic, no HTTP or database details
+
+**Repository Layer** (`internal/repository/`):
+- `repository.go`: Interface definitions for all database operations
+- `postgres_repository.go`: PostgreSQL implementation of interfaces
+- Abstraction allows easy testing and database swapping
+
+**Validation Layer** (`pkg/validation/`):
+- `auth_validator.go`: Username (3-50 chars), email, password (8+ chars) validation
+- `chat_validator.go`: Message length, temperature (0.0-2.0), format, War and Peace percentage (1-100)
+- Comprehensive test coverage in `*_test.go` files
+
+**Configuration Layer** (`internal/config/`):
+- `app.go`: Centralized AppConfig loading from environment
+- `models.go`: Model configuration loader and validator
+- Loads all config on startup into single struct
+
+### Database Migrations with golang-migrate (New)
+Unlike manual schema creation, the project **now uses migrations**:
+
+**Migration Files** (`backend/migrations/`):
+- `000001_create_users_table.up.sql` / `.down.sql`
+- `000002_create_conversations_table.up.sql` / `.down.sql`
+- `000003_create_messages_table.up.sql` / `.down.sql`
+- `000004_create_conversation_summaries_table.up.sql` / `.down.sql`
+- `000005_add_cost_tracking_to_messages.up.sql` / `.down.sql`
+- `000006_add_provider_to_messages.up.sql` / `.down.sql`
+- `000007_add_war_and_peace_fields.up.sql` / `.down.sql`
+
+**Auto-Application**:
+- Migrations run automatically on backend startup
+- `postgres.RunMigrations()` in `cmd/server/main.go`
+- Version tracking in `schema_migrations` table
+- Bidirectional support (up/down) for rollbacks
+
+**Adding New Migrations**:
+```bash
+# Create new migration files
+migrate create -ext sql -dir backend/migrations -seq your_migration_name
+
+# Edit .up.sql and .down.sql files
+# Restart backend to auto-apply
+docker compose restart backend
+```
+
+### Dual LLM Provider Support (New)
+The application supports **two LLM providers** via strategy pattern:
+
+**OpenRouter Provider** (production, default):
+- Direct HTTP API integration
+- Cost tracking via generation IDs
+- Async cost fetching with exponential backoff (3 retries)
+- Supports all models in `config/models.json`
+
+**Genkit Provider** (experimental):
+- Firebase Genkit framework integration
+- OpenAI-compatible API layer
+- Same interface as OpenRouter provider
+- Selected via `provider` field in chat requests
+
+**Provider Selection**:
+```typescript
+// Frontend sends provider preference
+POST /api/chat/stream {
+  message: "Hello",
+  provider: "openrouter"  // or "genkit"
+}
+
+// Backend uses appropriate provider
+if req.Provider == "genkit" {
+  provider = chatService.genkitProvider
+} else {
+  provider = chatService.openRouterProvider
+}
+```
+
+**Provider Tracking**:
+- Each message records which provider generated it
+- Stored in `messages.provider` column (added in migration 000006)
+- Displayed in UI alongside model name
+
+### War and Peace Context Injection (New)
+Advanced feature for **testing context window handling**:
+
+**Implementation** (`internal/context/warandpeace.go`):
+- Loads War and Peace text file (3.3MB) into memory on startup
+- Provides `GetWarAndPeaceContext(percentage int)` function
+- Returns specified percentage (1-100%) of the text
+- Used to test how models handle large context windows
+
+**Usage Flow**:
+```typescript
+// User enables in Settings UI
+POST /api/chat/stream {
+  message: "Analyze this text",
+  use_war_and_peace: true,
+  war_and_peace_percent: 50  // 50% of War and Peace text
+}
+
+// Backend appends to system prompt
+systemPrompt += "\n\n" + context.GetWarAndPeaceContext(50)
+```
+
+**Database Tracking**:
+- `messages.war_and_peace_used` (boolean)
+- `messages.war_and_peace_percent` (integer)
+- Added in migration 000007
+
+**Validation**:
+- Percentage must be 1-100 (validated by `ChatRequestValidator`)
+- Cannot use with response format JSON/XML (validation error)
+
+### Cost and Performance Tracking (New)
+Messages now track **comprehensive cost and performance metrics**:
+
+**Database Fields** (added in migration 000005):
+```sql
+messages (
+  prompt_tokens INTEGER,        -- Tokens in user prompt + history
+  completion_tokens INTEGER,    -- Tokens in assistant response
+  total_cost DECIMAL(10, 6),   -- Total cost in USD
+  latency INTEGER,             -- Time to first token (ms)
+  generation_time INTEGER      -- Total generation time (ms)
+)
+```
+
+**Cost Fetching Flow**:
+1. OpenRouter returns `generation_id` in streaming response (via `USAGE:` SSE event)
+2. Backend extracts and stores generation_id
+3. **Async goroutine** fetches cost data from OpenRouter API:
+   - Retries 3 times with exponential backoff (100ms, 200ms, 400ms)
+   - GET `https://openrouter.ai/api/v1/generation?id={generation_id}`
+   - Parses token counts and cost from response
+4. Updates message record in database
+
+**Performance Metrics**:
+- **Latency**: Time from request start to first token received
+- **Generation Time**: Total time to complete streaming response
+- Both measured in milliseconds
+
+**Display**:
+- Cost and token data can be shown in UI (currently backend-only)
+- Useful for analyzing model efficiency and costs
 
 ### SSE Streaming Over WebSocket
 - Uses Server-Sent Events (SSE) instead of WebSocket for simpler, unidirectional streaming
 - Newlines escaped on backend (`\n` → `\\n`) and unescaped on frontend for protocol compliance
-- Metadata (conversation ID, model name) sent as special SSE events with prefixes (CONV_ID:, MODEL:)
+- Metadata sent as special SSE events with prefixes:
+  - `CONV_ID:uuid-string` - Conversation ID for new conversations
+  - `MODEL:model-name` - Model used for generating response
+  - `TEMPERATURE:0.70` - Temperature used for generating response
+  - `USAGE:generation-id` - OpenRouter generation ID for cost tracking (NEW)
 
 ### Response Format System
 - **Three formats supported**: text (default), JSON, XML
@@ -137,10 +362,11 @@ Frontend: Message component renders based on format
 
 ### LLM Parameter Management
 - **Temperature Control**: User-adjustable via Settings UI (0.0-2.0 slider, default 0.7)
-  - Temperature sent with every request to OpenRouter API
+  - Temperature sent with every request to LLM API
   - Saved with each message in database
   - Displayed alongside model name in message UI
   - Preference persisted in localStorage
+  - Validated by `ChatRequestValidator` (0.0-2.0 range)
 - **Format-aware parameters**: Different top_p/top_k for text vs structured formats
 - **Environment-based configuration** (top_p and top_k only):
   - `OPENROUTER_TEXT_TOP_P/TOP_K` for text conversations (0.9/40)
@@ -152,7 +378,7 @@ Frontend: Message component renders based on format
 - **Configuration-based**: Available models defined in `backend/config/models.json`
 - **Model structure**: Each model has id, name, provider, and tier fields
 - **Default selection**: First model in config file used as default
-- **Backend validation**: Model IDs validated against config before API calls
+- **Backend validation**: Model IDs validated via `config.IsValidModel()` before API calls
 - **Frontend fetching**: `GET /api/models` returns available models for UI dropdown
 - **User selection**: Models chosen via Settings modal (⚙️) dropdown
 - **Persistence**: Selected model saved to localStorage (`selectedModel`)
@@ -169,33 +395,13 @@ Frontend: Message component renders based on format
 5. `alibaba/tongyi-deepresearch-30b-a3b:free` - Tongyi DeepResearch 30B (Alibaba, free)
 6. `openrouter/polaris-alpha` - Polaris Alpha (OpenRouter, paid)
 
-**Implementation Flow**:
-```
-Startup: backend/cmd/server/main.go loads config/models.json
-  ↓
-User opens Settings: Frontend fetches GET /api/models
-  ↓
-User selects model: Saved to localStorage.selectedModel
-  ↓
-User sends message: Model included in POST /api/chat/stream
-  ↓
-Backend validates model via config.IsValidModel(modelID)
-  ↓
-Backend passes model to llm.ChatWithHistoryStream(modelOverride)
-  ↓
-LLM uses provided model or defaults to first in config
-  ↓
-Backend sends model name via SSE: data: MODEL:model-name
-  ↓
-Frontend displays model in message: "AI (model-name)"
-  ↓
-Backend saves to DB: messages.model column
-```
+Plus 4 additional models (check `config/models.json` for full list)
 
 ### Message History Pattern
 - Full conversation history sent with every request to LLM for context coherence
 - System prompt **always** prepended as first message: `{role: "system", content: "...prompt..."}`
-- History retrieved in chronological order from DB
+- History retrieved in chronological order from repository
+- **Summary optimization**: If conversation has active summary, only sends messages after last summarized message
 
 ### Frontend State Management
 - Minimal React state: messages, input, loading, conversationId, model, temperature, systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, theme, settingsOpen
@@ -205,7 +411,7 @@ Backend saves to DB: messages.model column
 
 ### UUID for All IDs
 - All database IDs use PostgreSQL UUID type (Universally Unique Identifiers)
-- Backend: Uses `github.com/google/uuid` v1.3.0 for UUID generation
+- Backend: Uses `github.com/google/uuid` v1.6.0 for UUID generation
 - User IDs, Conversation IDs, and Message IDs are all UUIDs (string type in Go)
 - Frontend: All ID types changed from `number` to `string` to accommodate UUID strings
 - Benefits: Better distributed system support, higher collision resistance, cryptographic strength
@@ -214,7 +420,13 @@ Backend saves to DB: messages.model column
 ## Database Schema
 
 ```sql
-users (id UUID PRIMARY KEY, username VARCHAR UNIQUE, email VARCHAR, password_hash VARCHAR, created_at TIMESTAMP)
+users (
+  id UUID PRIMARY KEY,
+  username VARCHAR UNIQUE,
+  email VARCHAR,
+  password_hash VARCHAR,
+  created_at TIMESTAMP
+)
   ↓
 conversations (
   id UUID PRIMARY KEY,
@@ -234,6 +446,14 @@ messages (
   content TEXT,
   model VARCHAR(255),                            -- LLM model used for assistant responses
   temperature REAL,                              -- Temperature used for generating response (0.0-2.0)
+  provider VARCHAR(50),                          -- NEW: 'openrouter' or 'genkit'
+  prompt_tokens INTEGER,                         -- NEW: Tokens in prompt + history
+  completion_tokens INTEGER,                     -- NEW: Tokens in response
+  total_cost DECIMAL(10, 6),                     -- NEW: Cost in USD
+  latency INTEGER,                               -- NEW: Time to first token (ms)
+  generation_time INTEGER,                       -- NEW: Total generation time (ms)
+  war_and_peace_used BOOLEAN DEFAULT FALSE,      -- NEW: Was War and Peace context used
+  war_and_peace_percent INTEGER,                 -- NEW: Percentage of text used (1-100)
   created_at TIMESTAMP
 )
   ↓
@@ -241,30 +461,31 @@ conversation_summaries (
   id UUID PRIMARY KEY,
   conversation_id UUID REFERENCES conversations ON DELETE CASCADE,
   summary_content TEXT NOT NULL,                 -- LLM-generated summary of conversation
-  summarized_up_to_message_id UUID REFERENCES messages ON DELETE SET NULL,  -- Last message included in summary
-  usage_count INTEGER DEFAULT 0,                 -- How many times this summary was used (triggers re-summarization at 2+)
+  summarized_up_to_message_id UUID REFERENCES messages ON DELETE SET NULL,
+  usage_count INTEGER DEFAULT 0,                 -- Increments each use; triggers re-summarization at 2+
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+  ↓
+schema_migrations (
+  version BIGINT PRIMARY KEY,                    -- NEW: Migration version tracking
+  dirty BOOLEAN NOT NULL                         -- NEW: Migration state
 )
 ```
 
 **Key Features:**
-- All IDs are UUID type for distributed system compatibility and collision resistance
+- All IDs are UUID type for distributed system compatibility
 - Conversations auto-created on first message with first 100 chars as title
 - **response_format** column locks format after first message (cannot be changed)
 - **response_schema** stores JSON/XML schema definition for validation
-- **model** column tracks which LLM model generated each assistant response
+- **model** and **provider** columns track which LLM generated each response
 - **temperature** column tracks temperature setting (0.0-2.0) used for each response
-- **conversation_summaries** table stores LLM-generated conversation summaries:
-  - **summary_content**: Text summary of conversation up to a specific message
-  - **summarized_up_to_message_id**: Tracks which message was the last one summarized
-  - **usage_count**: Increments each time summary is used; triggers re-summarization at 2+
-  - Multiple summaries per conversation supported (progressive re-summarization)
-  - Most recent summary retrieved via `ORDER BY created_at DESC LIMIT 1`
-- Messages store role ('user' or 'assistant') for history reconstruction
+- **Cost tracking fields**: prompt_tokens, completion_tokens, total_cost (added in migration 000005)
+- **Performance tracking**: latency, generation_time in milliseconds
+- **War and Peace tracking**: war_and_peace_used, war_and_peace_percent (added in migration 000007)
+- **conversation_summaries** table stores LLM-generated conversation summaries
+- **schema_migrations** table tracks applied migrations for golang-migrate
 - Cascade deletes prevent orphaned records
-- Indexes on user_id, conversation_id, and conversation_summaries.conversation_id for query performance
-- UUIDs generated on the backend using `google/uuid` package
-- COALESCE used in queries to handle NULL values: `COALESCE(response_format, 'text')`, `COALESCE(model, '')`
+- Indexes on user_id, conversation_id, and conversation_summaries.conversation_id
 
 ## Configuration
 
@@ -272,14 +493,17 @@ conversation_summaries (
 
 **Required:**
 - `OPENROUTER_API_KEY` - API key for OpenRouter LLM service
+- `JWT_SECRET` - **Must be 32+ characters** (validated on startup)
 
 **Optional (with defaults):**
+- `SERVER_PORT` - Backend server port (default: 8080)
 - `OPENROUTER_SYSTEM_PROMPT` - Default system prompt (default: "You are a helpful assistant.")
-- **Format-Aware LLM Parameters** (temperature is now user-controlled via Settings UI):
+- **Format-Aware LLM Parameters** (temperature is user-controlled via UI):
   - `OPENROUTER_TEXT_TOP_P` - Top-P for text conversations (default: 0.9)
   - `OPENROUTER_TEXT_TOP_K` - Top-K for text conversations (default: 40)
   - `OPENROUTER_STRUCTURED_TOP_P` - Top-P for JSON/XML (default: 0.8)
   - `OPENROUTER_STRUCTURED_TOP_K` - Top-K for JSON/XML (default: 20)
+- `JWT_EXPIRATION_HOURS` - Token expiration in hours (default: 24)
 - `DB_HOST` - PostgreSQL host (default: postgres in Docker, localhost locally)
 - `DB_PORT` - PostgreSQL port (default: 5432)
 - `DB_USER` - PostgreSQL user (default: postgres)
@@ -288,7 +512,8 @@ conversation_summaries (
 - `DB_SSLMODE` - SSL mode (default: disable)
 - `REACT_APP_API_URL` - Backend URL for frontend (default: http://localhost:8080)
 
-**Note**: `OPENROUTER_MODEL` environment variable has been deprecated. Model selection is now managed via `backend/config/models.json`.
+**Deprecated:**
+- `OPENROUTER_MODEL` - Model selection now via `backend/config/models.json`
 
 ### Model Configuration (backend/config/models.json)
 
@@ -301,24 +526,6 @@ Available LLM models are configured in a JSON file with the following structure:
     "name": "Llama 3.3 8B Instruct (Free)",
     "provider": "Meta",
     "tier": "free"
-  },
-  {
-    "id": "mistralai/mistral-7b-instruct:free",
-    "name": "Mistral 7B Instruct (Free)",
-    "provider": "Mistral AI",
-    "tier": "free"
-  },
-  {
-    "id": "z-ai/glm-4.5-air:free",
-    "name": "GLM 4.5 Air (Free)",
-    "provider": "Z-AI",
-    "tier": "free"
-  },
-  {
-    "id": "openrouter/polaris-alpha",
-    "name": "Polaris Alpha",
-    "provider": "OpenRouter",
-    "tier": "paid"
   }
 ]
 ```
@@ -333,72 +540,254 @@ Available LLM models are configured in a JSON file with the following structure:
 
 **Loading**: Configuration is loaded on backend startup via `config.LoadModels()` in `cmd/server/main.go`.
 
+**Validation**: Backend validates model IDs via `config.IsValidModel(modelID)` before making API calls.
+
 ### Demo User
-Automatically seeded on backend startup:
+Automatically seeded on backend startup (idempotent):
 - Username: `demo`
 - Password: `demo123`
 
 ## Common Development Tasks
 
-### Adding a New Chat Endpoint
-1. Add handler function to `backend/internal/handlers/chat.go`
-2. Register route in `backend/cmd/server/main.go` using Go 1.22+ method-based routing:
-   ```go
-   mux.HandleFunc("POST /api/new/endpoint", enableCORS(auth.AuthMiddleware(chatHandler.Handler)))
-   mux.HandleFunc("OPTIONS /api/new/endpoint", corsHandler)  // ← CORS preflight
-   ```
-3. Extract path parameters with `r.PathValue("param_name")` if needed
-4. Add corresponding method to ChatService in `frontend/src/services/chat.ts`
-5. Update Chat component callbacks or UI if needed
+### Adding a New API Endpoint
+
+**1. Add handler to appropriate file** (`internal/api/handlers/`):
+```go
+func (h *ChatHandlers) NewEndpoint(w http.ResponseWriter, r *http.Request) {
+    // Extract user from context
+    user := auth.GetUserFromContext(r.Context())
+
+    // Validate request
+    var req NewRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request", http.StatusBadRequest)
+        return
+    }
+
+    // Call service layer
+    result, err := h.chatService.DoSomething(user.ID, req.Data)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // Return response
+    json.NewEncoder(w).Encode(result)
+}
+```
+
+**2. Register route in `cmd/server/main.go`**:
+```go
+mux.HandleFunc("POST /api/new/endpoint", enableCORS(auth.AuthMiddleware(chatHandlers.NewEndpoint)))
+mux.HandleFunc("OPTIONS /api/new/endpoint", corsHandler)  // ← CORS preflight
+```
+
+**3. Add business logic to service layer** (`internal/service/`):
+```go
+func (s *ChatService) DoSomething(userID string, data string) (Result, error) {
+    // Business logic here
+    // Call repository for database operations
+    return s.repo.SomeQuery(userID, data)
+}
+```
+
+**4. Add database operations to repository** (`internal/repository/`):
+```go
+// Add to repository.go interface
+type Repository interface {
+    SomeQuery(userID string, data string) (Result, error)
+}
+
+// Implement in postgres_repository.go
+func (r *PostgresRepository) SomeQuery(userID string, data string) (Result, error) {
+    // SQL query here
+}
+```
+
+**5. Update frontend service** (`frontend/src/services/chat.ts`):
+```typescript
+async newEndpoint(data: string): Promise<Result> {
+  const response = await fetch(`${API_URL}/api/new/endpoint`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getAuthToken()}`
+    },
+    body: JSON.stringify({ data })
+  });
+  return response.json();
+}
+```
+
+### Adding a Database Migration
+
+**1. Create migration files**:
+```bash
+cd backend
+migrate create -ext sql -dir migrations -seq add_new_field
+```
+
+**2. Edit `.up.sql`**:
+```sql
+ALTER TABLE messages ADD COLUMN new_field VARCHAR(255);
+CREATE INDEX idx_messages_new_field ON messages(new_field);
+```
+
+**3. Edit `.down.sql`**:
+```sql
+DROP INDEX idx_messages_new_field;
+ALTER TABLE messages DROP COLUMN new_field;
+```
+
+**4. Restart backend** (auto-applies migrations):
+```bash
+docker compose restart backend
+```
+
+**5. Update repository interface and implementation**:
+```go
+// repository.go
+type Message struct {
+    ID       string
+    NewField string  // Add new field
+}
+
+// postgres_repository.go - update queries to include new field
+```
 
 ### Modifying LLM Behavior
-- Edit `backend/internal/llm/openrouter.go`:
-  - Change system prompt in `GetSystemPrompt()`
-  - Modify message building in `buildMessagesWithHistory()`
-  - Adjust OpenRouter request parameters in ChatRequest struct
+
+**OpenRouter Provider** (`internal/service/openrouter_provider.go`):
+- Modify `ChatWithHistoryStream()` for streaming logic
+- Adjust `buildMessagesWithHistory()` for message formatting
+- Update `ChatRequest` struct for new API parameters
+
+**Genkit Provider** (`internal/service/genkit_provider.go`):
+- Similar structure to OpenRouter provider
+- Modify for Genkit-specific behavior
+
+**System Prompts**:
+- Default: Edit `OPENROUTER_SYSTEM_PROMPT` in `.env`
+- Format-specific: Edit prompt construction in `ChatService.SendMessageStream()`
+
+### Adding a New LLM Provider
+
+**1. Create provider file** (`internal/service/new_provider.go`):
+```go
+type NewProvider struct {
+    apiKey string
+    config *config.LLMConfig
+}
+
+func NewNewProvider(apiKey string, cfg *config.LLMConfig) *NewProvider {
+    return &NewProvider{apiKey: apiKey, config: cfg}
+}
+
+func (p *NewProvider) ChatWithHistoryStream(
+    messages []Message,
+    systemPrompt string,
+    format string,
+    modelID string,
+    temperature float64,
+) (<-chan string, error) {
+    // Implement streaming logic
+}
+```
+
+**2. Add to ChatService** (`internal/service/chat_service.go`):
+```go
+type ChatService struct {
+    openRouterProvider *OpenRouterProvider
+    genkitProvider     *GenkitProvider
+    newProvider        *NewProvider  // Add new provider
+}
+```
+
+**3. Update handler** (`internal/api/handlers/chat_handlers.go`):
+```go
+var provider interface {
+    ChatWithHistoryStream(...) (<-chan string, error)
+}
+
+switch req.Provider {
+case "openrouter":
+    provider = h.chatService.OpenRouterProvider
+case "genkit":
+    provider = h.chatService.GenkitProvider
+case "newprovider":
+    provider = h.chatService.NewProvider  // Add new case
+default:
+    provider = h.chatService.OpenRouterProvider
+}
+```
 
 ### Adding UI Components
-- Create component in `frontend/src/components/`
-- Import in Chat.tsx and add to return JSX
-- Theme colors accessible via `getTheme(theme === 'dark')` returns color object
-- Leverage existing styles object for consistent spacing/typography
 
-### Database Migrations
-- Currently no migration tool (Migrate, Flyway, etc.)
-- Schema created in `backend/internal/db/postgres.go` InitDB() function
-- Add new tables to InitDB() and restart backend
-- **Production note:** Use proper migration tool before scaling
+**1. Create component** (`frontend/src/components/NewComponent.tsx`):
+```typescript
+import { useTheme } from '../contexts/ThemeContext';
+import { getTheme } from '../themes';
+
+export default function NewComponent() {
+  const { theme } = useTheme();
+  const colors = getTheme(theme === 'dark');
+
+  return (
+    <div style={{ backgroundColor: colors.background }}>
+      {/* Component content */}
+    </div>
+  );
+}
+```
+
+**2. Import in parent component**:
+```typescript
+import NewComponent from './NewComponent';
+
+// Use in JSX
+<NewComponent />
+```
+
+**3. Follow existing patterns**:
+- Use `getTheme()` for consistent theming
+- Store state in localStorage for persistence
+- Use fetch with JWT token for API calls
 
 ## Security Notes
 
 **Current Implementation:**
-- JWT secret hardcoded in `backend/internal/auth/auth.go` (not env-configurable)
+- JWT secret **required to be 32+ characters** (validated on startup)
 - CORS allows all origins (`Access-Control-Allow-Origin: *`)
 - Bcrypt password hashing with default cost factor
 - User ownership verified for conversation access
 - Demo credentials valid for testing only
+- SQL injection protection via parameterized queries
 
 **Production Improvements Needed:**
-- Move JWT secret to environment variable
+- Move JWT secret to secrets manager (Vault, AWS Secrets Manager)
 - Restrict CORS to specific frontend origin
 - Add rate limiting on auth endpoints
-- Enable HTTPS
-- Use secrets management (Vault, AWS Secrets Manager)
+- Enable HTTPS/TLS
+- Implement refresh tokens
+- Add request logging and monitoring
+- Enable database connection pooling limits
 
 ## Performance Considerations
 
-- Message history sent with every request (could paginate for large conversations)
-- No caching of LLM responses (every message goes to OpenRouter)
+- Message history sent with every request (use summaries for large conversations)
+- No caching of LLM responses (every message goes to provider)
 - Single database connection pool (tuning available via driver)
-- Frontend renders all messages in DOM (virtualizing list for 1000+ messages recommended)
+- Frontend renders all messages in DOM (virtualizing list recommended for 1000+ messages)
 - SSE streaming prevents browser from accumulating large response objects
+- Cost data fetched asynchronously (doesn't block response)
+- War and Peace context loads once on startup (cached in memory)
 
 ## Deployment
 
 ```bash
 # Set up environment
 cp .env.example .env
-# Edit .env with your OPENROUTER_API_KEY
+# Edit .env with your OPENROUTER_API_KEY and JWT_SECRET (32+ chars)
 
 # Build and run
 docker compose build
@@ -407,24 +796,51 @@ docker compose up
 # Access
 # Frontend: http://localhost:3000
 # Backend health check: http://localhost:8080/api/health
+
+# Check logs
+docker compose logs backend
+docker compose logs frontend
+docker compose logs postgres
+
+# Clean restart (removes volumes)
+docker compose down -v
+docker compose up --build
 ```
 
 **Docker Images:**
 - Frontend: nginx:alpine serving React build with SPA routing fallback
 - Backend: alpine:latest with Go binary, ca-certificates for HTTPS
-- PostgreSQL: postgres:15-alpine with data volume
+- PostgreSQL: postgres:15-alpine with persistent data volume
 
 ## Testing Infrastructure
 
 **Frontend:**
 - Jest + React Testing Library (via react-scripts)
-- No snapshot tests configured
+- Command: `cd frontend && npm test`
 - Component tests in same directory as components
+- No snapshot tests configured
 
 **Backend:**
-- Standard Go testing (go test)
+- Standard Go testing (`go test ./...`)
+- Validation layer has comprehensive test coverage
+- Command: `cd backend && go test ./pkg/validation -v`
 - Database tests need PostgreSQL running or mocking
 - No mocking/stubbing framework currently in use
+
+**Test Examples:**
+```bash
+# Run all backend tests
+cd backend && go test ./...
+
+# Run specific package with verbose output
+cd backend && go test ./pkg/validation -v
+
+# Run frontend tests
+cd frontend && npm test
+
+# Run frontend tests in CI mode
+cd frontend && CI=true npm test
+```
 
 ## Routing (Go 1.25.3 Native)
 
@@ -464,242 +880,136 @@ This ensures:
 
 ```
 backend/
-  cmd/server/main.go              # Entry point, route setup (Go 1.22+ method-based routing), server start, models config loading
+  cmd/server/main.go              # Entry point, route setup, server start, config loading
   config/models.json              # Available LLM models configuration
-  internal/auth/auth.go           # JWT, login, register, middleware
-  internal/config/models.go       # Models configuration loader and validator
-  internal/db/                    # Database layer (postgres.go, user.go, conversation.go)
-  internal/handlers/chat.go       # HTTP handlers for /api/chat and /api/models endpoints
-  internal/llm/openrouter.go      # LLM integration, message building, streaming, model selection
+  migrations/                     # Database migration files (golang-migrate)
+    000001_create_users_table.up.sql / .down.sql
+    000002_create_conversations_table.up.sql / .down.sql
+    ...
+  internal/
+    api/handlers/                 # HTTP handlers (auth, chat, models)
+      auth_handlers.go
+      chat_handlers.go
+      models_handlers.go
+    service/                      # Business logic layer
+      chat_service.go
+      conversation_service.go
+      summary_service.go
+      openrouter_provider.go
+      genkit_provider.go
+    repository/                   # Database abstraction layer
+      repository.go               # Interface definitions
+      postgres_repository.go      # PostgreSQL implementation
+    config/                       # Configuration loading
+      app.go                      # AppConfig struct and loader
+      models.go                   # Models config loader
+    context/                      # Context utilities
+      warandpeace.go              # War and Peace text loader
+    app/                          # App-level setup
+      app.go                      # Application initialization
+    auth/                         # Authentication
+      auth.go                     # JWT generation and validation
+      middleware.go               # Auth middleware
+    logger/                       # Structured logging
+      logger.go                   # Logrus setup
+  pkg/validation/                 # Request validators
+    auth_validator.go
+    auth_validator_test.go
+    chat_validator.go
+    chat_validator_test.go
 
 frontend/
-  src/App.tsx                     # Root, auth routing
-  src/components/Chat.tsx         # Main chat UI, message streaming, model state management
-  src/components/Message.tsx      # Message rendering with model display
-  src/components/Login.tsx        # Auth forms
-  src/components/SettingsModal.tsx # System prompt, model, and format configuration
-  src/services/auth.ts            # JWT token management
-  src/services/chat.ts            # API calls, SSE parsing, model fetching
-  src/contexts/ThemeContext.tsx   # Theme state provider
-  src/themes.ts                   # Color palettes
+  src/
+    components/                   # React components
+      Chat.tsx                    # Main chat UI
+      Message.tsx                 # Message rendering
+      Login.tsx                   # Auth forms
+      SettingsModal.tsx           # Settings UI
+      Sidebar.tsx                 # Conversation sidebar
+    services/                     # API clients
+      auth.ts                     # JWT token management
+      chat.ts                     # Chat API calls, SSE parsing
+    contexts/                     # React contexts
+      ThemeContext.tsx            # Theme state provider
+    themes.ts                     # Color palettes
+    App.tsx                       # Root component
+    index.tsx                     # Entry point
 
 docker-compose.yml                # Service orchestration
 .env.example                      # Configuration template
+CLAUDE.md                         # This file
 ```
 
 ## Debugging Tips
 
 **Backend:**
-- Check logs: `docker compose logs backend`
+- Check logs: `docker compose logs backend --follow`
 - Database connection: Verify DB_HOST, DB_PORT, DB_USER, DB_PASSWORD in .env
 - LLM errors: Check OPENROUTER_API_KEY validity and quota
-- Auth failures: Verify JWT secret matches between sign/verify
+- Auth failures: Verify JWT_SECRET is 32+ characters
+- Migration issues: Check `schema_migrations` table for version
+- Cost tracking: Check for generation_id in SSE stream
 
 **Frontend:**
 - Browser console: Check for fetch errors, SSE connection issues
 - Network tab: Inspect request/response headers and SSE stream format
-- localStorage: Verify auth_token, theme, systemPrompt keys persist
+- localStorage: Verify auth_token, theme, systemPrompt, selectedModel keys persist
 - Theme not loading: Ensure ThemeContext loads before Chat component mounts
 
 **Database:**
-- Connect directly: `psql -h localhost -U postgres -d chatapp`
+- Connect directly: `docker compose exec postgres psql -U postgres -d chatapp`
 - Check tables: `\dt` in psql
+- View migrations: `SELECT * FROM schema_migrations;`
 - Clear data: `DELETE FROM conversations;` (cascade deletes messages)
-- Reset demo user: Stop backend, delete user, restart backend
+- Reset demo user: `DELETE FROM users WHERE username = 'demo';` then restart backend
+
+**Migrations:**
+- Check status: `SELECT * FROM schema_migrations;`
+- Force version (if stuck): `UPDATE schema_migrations SET version = N, dirty = false;`
+- Manual migration: Use `migrate` CLI with connection string
 
 ## LLM Integration Details
 
-**OpenRouter API:**
+### OpenRouter API (Primary)
 - Endpoint: https://openrouter.ai/api/v1/chat/completions
 - Authentication: Bearer token in Authorization header
-- Default model: First model from `backend/config/models.json` (currently: meta-llama/llama-3.3-8b-instruct:free)
+- Default model: First model from `backend/config/models.json`
 - Stream support: Full SSE streaming capability
 - System prompt: First message with role='system'
+- Cost tracking: Via generation IDs with async fetching
 
-**Model Selection:**
+### Genkit API (Experimental)
+- Firebase Genkit framework integration
+- OpenAI-compatible API layer
+- Same interface as OpenRouter provider
+- Selected via `provider: "genkit"` in requests
+
+### Model Selection
 - **Configuration**: Models defined in `backend/config/models.json`
 - **API Endpoint**: `GET /api/models` returns available models
 - **Runtime Selection**: User chooses model from Settings UI dropdown
 - **Override**: Optional `model` parameter in chat request overrides default
 - **Validation**: Backend validates model ID via `config.IsValidModel()` before API calls
-- **Tracking**: Model name saved in `messages.model` column for each response
+- **Tracking**: Model name and provider saved in `messages` table
 - **Display**: Model name shown in UI next to "AI" label
 
-**Available Models** (as configured):
-1. **Llama 3.3 8B Instruct** (Meta, free): `meta-llama/llama-3.3-8b-instruct:free`
-2. **Mistral 7B Instruct** (Mistral AI, free): `mistralai/mistral-7b-instruct:free`
-3. **GLM 4.5 Air** (Z-AI, free): `z-ai/glm-4.5-air:free`
-4. **Polaris Alpha** (OpenRouter, paid): `openrouter/polaris-alpha`
-
-**Response Format (Streaming):**
+### Response Format (Streaming)
 ```
 data: {"choices":[{"delta":{"content":"Hello"}}]}
 data: {"choices":[{"delta":{"content":" world"}}]}
 data: MODEL:meta-llama/llama-3.3-8b-instruct:free
+data: TEMPERATURE:0.70
+data: USAGE:gen_xyz123
 data: [DONE]
 ```
 
-**Metadata Events** (SSE with prefixes):
+### Metadata Events (SSE with prefixes)
 - `CONV_ID:uuid-string` - Conversation ID for new conversations
 - `MODEL:model-name` - Model used for generating response
 - `TEMPERATURE:0.70` - Temperature used for generating response
+- `USAGE:generation-id` - OpenRouter generation ID for cost tracking (NEW)
 
 Parsed by frontend: unescape newlines, collect chunks, capture metadata, skip [DONE]
-
-## Response Format Feature
-
-### Overview
-The application supports three response formats:
-1. **Text** (default) - Natural conversation with markdown
-2. **JSON** - Structured data with schema enforcement
-3. **XML** - Structured markup with schema enforcement
-
-### Format Selection Flow
-
-**New Conversation:**
-1. User opens Settings (⚙️) before sending first message
-2. Selects format (Text/JSON/XML) via radio buttons
-3. If JSON/XML selected, must provide schema in textarea
-4. Sends first message → format + schema saved to DB
-5. Format is now **locked** for this conversation
-
-**Existing Conversation:**
-1. User opens Settings (⚙️)
-2. Sees "🔒 Locked Configuration" message with current format
-3. Radio buttons are hidden (not disabled)
-4. Schema is shown in read-only textarea
-5. Cannot change format or schema
-
-### Frontend Implementation
-
-**Components:**
-- `SettingsModal.tsx`: Format/schema configuration UI
-  - Shows radio buttons only for new conversations (`!isExistingConversation`)
-  - Locks configuration for existing conversations
-  - Stores format/schema in localStorage (for new conversations)
-  - Reads from `conversationFormat`/`conversationSchema` props (for existing)
-
-- `Message.tsx`: Format-specific rendering
-  - `renderJsonAsTree()`: Parses JSON, displays as hierarchical tree supporting nested objects/arrays at unlimited depth with collapsible raw view
-  - `renderXmlAsTree()`: Parses XML with DOMParser, displays as hierarchical tree with collapsible raw view
-  - Uses `<details>/<summary>` HTML elements for collapsible raw views
-  - Recursive rendering for unlimited nesting depth
-
-**State Management:**
-```typescript
-// User preferences (new conversations)
-const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
-const [responseSchema, setResponseSchema] = useState<string>('');
-
-// Locked conversation settings (existing conversations)
-const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
-const [conversationSchema, setConversationSchema] = useState<string>('');
-```
-
-### Backend Implementation
-
-**Database:**
-```sql
-conversations (
-  response_format VARCHAR(10) DEFAULT 'text',
-  response_schema TEXT
-)
-```
-
-**Handler Logic:**
-```go
-// Create new conversation
-if req.ConversationID == "" {
-  conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
-}
-
-// Build format-specific system prompt
-if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
-  effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema...")
-} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
-  effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema...")
-} else {
-  effectiveSystemPrompt = req.SystemPrompt  // User's custom prompt
-}
-
-// Pass format to LLM for parameter selection
-chunks, err := llm.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat)
-```
-
-**LLM Parameter Selection:**
-```go
-// Temperature is now user-provided via Settings UI (0.0-2.0)
-// Top-P and Top-K still from environment variables
-func GetTopP(format string) *float64 {
-  if format == "json" || format == "xml" {
-    return os.Getenv("OPENROUTER_STRUCTURED_TOP_P")  // 0.8
-  }
-  return os.Getenv("OPENROUTER_TEXT_TOP_P")  // 0.9
-}
-```
-
-### Visual Rendering
-
-**JSON Format:**
-```
-[View Raw JSON ▼]  ← Collapsible details element
-
-user: {...}
-  ├─ name: "John Doe"
-  ├─ age: 30
-  ├─ active: true
-  ├─ tags: [3 items]
-  │   ├─ [0]: "developer"
-  │   ├─ [1]: "golang"
-  │   └─ [2]: "react"
-  └─ address: {...}
-      ├─ city: "New York"
-      ├─ country: "USA"
-      └─ coordinates: {...}
-          ├─ lat: 40.7128
-          └─ lng: -74.0060
-```
-
-**Rendering Features:**
-- Unlimited nesting depth with 20px indentation per level
-- Color-coded keys (primary color, bold) and values
-- Type-aware rendering: strings with quotes, numbers/booleans plain
-- Arrays show `[N items]` count with indexed elements `[0]`, `[1]`, etc.
-- Objects show `{...}` indicator with nested properties
-- Left border (3px solid) for structure clarity
-- Alternating backgrounds for nested levels
-- Handles null values with italic styling
-
-**XML Format:**
-```
-[View Raw XML ▼]  ← Collapsible details element
-
-<response version="1.0">
-  ├─ <question>
-  │   What is AI?
-  └─ <answer>
-      Artificial Intelligence
-</response>
-
-↑ Rendered as hierarchical tree with:
-- Color-coded tags (primary color)
-- Attribute display with proper formatting
-- Left border (3px solid) for structure
-- Alternating backgrounds for nesting levels
-- Inline text for simple elements
-- Full tree expansion for complex elements
-```
-
-### Key Features
-
-1. **Format Locking**: Prevents format changes mid-conversation (data integrity)
-2. **Schema Enforcement**: LLM instructed to strictly follow schema
-3. **Visual Parsing**: JSON/XML parsed and rendered as hierarchical trees
-4. **Unlimited Nesting**: Recursive rendering supports any depth of nested structures
-5. **Raw View**: Collapsible access to original response
-6. **Error Handling**: Falls back to `<pre>` if parsing fails
-7. **Parameter Optimization**: Lower temperature for structured formats (0.3 vs 0.7)
-8. **Type-Aware Display**: Different colors/styles for strings, numbers, booleans, null, objects, arrays
 
 ## Conversation Summarization Feature
 
@@ -713,10 +1023,10 @@ The application supports manual conversation summarization with progressive re-s
 - Sends POST request to `/api/conversations/{id}/summarize`
 
 **First Summarization:**
-1. Backend checks if active summary exists via `db.GetActiveSummary(conversationID)`
+1. Backend checks if active summary exists via repository
 2. If no summary: Retrieves all messages from conversation
-3. Calls `llm.ChatForSummarization()` with summarization-only system prompt (no default system prompt)
-4. Creates new summary in database with `db.CreateSummary()`
+3. Calls LLM provider with summarization-only system prompt
+4. Creates new summary in database
 5. Returns summary content and `summarized_up_to_message_id`
 
 **Progressive Re-Summarization (after 2+ uses):**
@@ -724,94 +1034,15 @@ The application supports manual conversation summarization with progressive re-s
 2. Builds input: `[old summary as context] + [messages after last summarized message]`
 3. Calls LLM to create new summary from combined content
 4. Saves new summary to database (old summary remains for history)
-5. Updates conversation's `active_summary_id` to new summary
+5. Returns updated summary
 
 **Usage in Chat:**
-- When user sends new message, `ChatStreamHandler` checks for active summary
+- When user sends new message, handler checks for active summary
 - If summary exists:
   - Fetches only messages AFTER `summarized_up_to_message_id`
   - Prepends summary as context to system prompt
   - Increments summary `usage_count`
 - LLM receives: `[system prompt with summary context] + [recent messages only]`
-
-### Frontend Implementation
-
-**Components:**
-- `Chat.tsx`:
-  - State: `summaries: Array<{ upToMessageId: string; content: string }>`
-  - `handleSummarize()`: Calls API, adds to summaries array, reloads messages to get IDs
-  - Loads summaries on conversation open via `chatService.getConversationSummaries()`
-
-- `chat.ts`:
-  - `summarizeConversation()`: POST to `/api/conversations/{id}/summarize`
-  - `getConversationSummaries()`: GET all summaries for displaying on conversation load
-
-**Visual Display:**
-```tsx
-{messages.map((msg, idx) => {
-  const summaryForThisMessage = summaries.find(s => s.upToMessageId === msg.id);
-  return (
-    <>
-      <Message {...msg} />
-      {summaryForThisMessage && (
-        <details>
-          <summary>📋 Messages above have been summarized (click to view)</summary>
-          <div>{summaryForThisMessage.content}</div>
-        </details>
-      )}
-    </>
-  );
-})}
-```
-
-### Backend Implementation
-
-**Database Functions (`internal/db/conversation.go`):**
-- `CreateSummary(conversationID, summaryContent, summarizedUpToMessageID)`: Creates new summary
-- `GetActiveSummary(conversationID)`: Returns most recent summary (`ORDER BY created_at DESC LIMIT 1`)
-- `GetAllSummaries(conversationID)`: Returns all summaries in chronological order
-- `IncrementSummaryUsageCount(summaryID)`: Increments usage_count by 1
-- `GetMessagesAfterMessage(conversationID, afterMessageID)`: Fetches messages created after specific message
-- `GetLastMessageID(conversationID)`: Returns ID of most recent message
-- `UpdateConversationActiveSummary(conversationID, summaryID)`: Updates active_summary_id reference
-
-**API Endpoints (`internal/handlers/chat.go`):**
-- `SummarizeConversationHandler`:
-  - POST `/api/conversations/{id}/summarize`
-  - Validates ownership, determines summarization strategy, calls LLM, saves result
-  - Returns: `{summary, summarized_up_to_message_id, conversation_id}`
-
-- `GetConversationSummariesHandler`:
-  - GET `/api/conversations/{id}/summaries`
-  - Returns all summaries for a conversation
-  - Response: `{summaries: [{id, summary_content, summarized_up_to_message_id, usage_count, created_at}]}`
-
-**LLM Integration (`internal/llm/openrouter.go`):**
-- `ChatForSummarization(messages, summarizationPrompt, model, temperature)`:
-  - Uses `buildMessagesWithCustomSystemPrompt()` instead of `buildMessagesWithHistory()`
-  - Sends ONLY the summarization prompt (no default system prompt)
-  - Returns plain text summary
-
-**Summarization Logic:**
-```go
-// Check existing summary
-activeSummary, err := db.GetActiveSummary(convID)
-
-if err != nil || activeSummary == nil {
-    // No summary - summarize all messages
-    messagesToSummarize, _ = db.GetConversationMessages(convID)
-} else if activeSummary.UsageCount >= 2 {
-    // Re-summarize: old summary + new messages
-    messagesToSummarize = []llm.Message{
-        {Role: "assistant", Content: fmt.Sprintf("Previous summary:\n%s", activeSummary.SummaryContent)},
-    }
-    newMessages, _ := db.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
-    messagesToSummarize = append(messagesToSummarize, newMessages...)
-} else {
-    // Summary exists but usage_count < 2 - return existing
-    return existingSummary
-}
-```
 
 ### System Prompt Scenarios
 
@@ -836,8 +1067,7 @@ The implementation carefully separates three system prompt scenarios:
 ### Key Technical Details
 
 - **Multiple summaries supported**: Each re-summarization creates a new row in `conversation_summaries`
-- **Most recent summary**: Retrieved via `ORDER BY created_at DESC LIMIT 1` (not via `active_summary_id`)
+- **Most recent summary**: Retrieved via `ORDER BY created_at DESC LIMIT 1`
 - **Usage tracking**: `usage_count` incremented on each chat message sent after summary exists
-- **Message IDs required**: Frontend reloads messages after summarization to get server-generated UUIDs
 - **Collapsible UI**: Uses HTML5 `<details>` element for expandable summary view
 - **Persistence**: All summaries stored in database, loaded on conversation open
