@@ -5,146 +5,63 @@ import (
 	"chat-app/internal/logger"
 	"database/sql"
 	"fmt"
-	"os"
-	"sync"
 
 	_ "github.com/lib/pq"
 )
 
-var (
-	instance *sql.DB
-	once     sync.Once
-)
-
 // PostgresDB implements the Database interface
 type PostgresDB struct {
-	db *sql.DB
+	conn *sql.DB
 }
 
-// NewPostgresDB creates a new PostgresDB instance from the existing connection
-func NewPostgresDB() *PostgresDB {
-	return &PostgresDB{db: instance}
+// NewPostgresDB creates a new PostgresDB instance with a new connection
+func NewPostgresDB(dbConfig config.DatabaseConfig) (*PostgresDB, error) {
+	dsn := dbConfig.GetDSN()
+	logger.Log.WithField("dsn", dsn).Info("Connecting to PostgreSQL")
+
+	conn, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("error opening database: %w", err)
+	}
+
+	// Test the connection
+	if err = conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("error connecting to database: %w", err)
+	}
+
+	logger.Log.Info("Successfully connected to PostgreSQL")
+
+	db := &PostgresDB{conn: conn}
+
+	// Create tables
+	if err = db.createTables(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("error creating tables: %w", err)
+	}
+
+	logger.Log.Info("Tables created/verified")
+
+	return db, nil
 }
 
-// GetDB returns the singleton database connection
-func GetDB() *sql.DB {
-	return instance
-}
-
-// InitDB initializes the database connection and creates tables
-// Deprecated: Use InitDBWithConfig instead
-func InitDB() error {
-	var err error
-	once.Do(func() {
-		dsn := getDSN()
-		logger.Log.WithField("dsn", dsn).Info("Connecting to PostgreSQL")
-
-		instance, err = sql.Open("postgres", dsn)
-		if err != nil {
-			err = fmt.Errorf("error opening database: %w", err)
-			return
-		}
-
-		// Test the connection
-		if err = instance.Ping(); err != nil {
-			err = fmt.Errorf("error connecting to database: %w", err)
-			return
-		}
-
-		logger.Log.Info("Successfully connected to PostgreSQL")
-
-		// Create tables
-		if err = createTables(); err != nil {
-			err = fmt.Errorf("error creating tables: %w", err)
-			return
-		}
-
-		logger.Log.Info("Tables created/verified")
-	})
-
-	return err
-}
-
-// InitDBWithConfig initializes the database connection using provided config
-func InitDBWithConfig(dbConfig config.DatabaseConfig) error {
-	var err error
-	once.Do(func() {
-		dsn := dbConfig.GetDSN()
-		logger.Log.WithField("dsn", dsn).Info("Connecting to PostgreSQL")
-
-		instance, err = sql.Open("postgres", dsn)
-		if err != nil {
-			err = fmt.Errorf("error opening database: %w", err)
-			return
-		}
-
-		// Test the connection
-		if err = instance.Ping(); err != nil {
-			err = fmt.Errorf("error connecting to database: %w", err)
-			return
-		}
-
-		logger.Log.Info("Successfully connected to PostgreSQL")
-
-		// Create tables
-		if err = createTables(); err != nil {
-			err = fmt.Errorf("error creating tables: %w", err)
-			return
-		}
-
-		logger.Log.Info("Tables created/verified")
-	})
-
-	return err
-}
-
-// CloseDB closes the database connection
-func CloseDB() error {
-	if instance != nil {
-		return instance.Close()
+// Close closes the database connection
+func (p *PostgresDB) Close() error {
+	if p.conn != nil {
+		return p.conn.Close()
 	}
 	return nil
 }
 
-// getDSN constructs the PostgreSQL connection string
-func getDSN() string {
-	host := os.Getenv("DB_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-
-	port := os.Getenv("DB_PORT")
-	if port == "" {
-		port = "5432"
-	}
-
-	user := os.Getenv("DB_USER")
-	if user == "" {
-		user = "postgres"
-	}
-
-	password := os.Getenv("DB_PASSWORD")
-	if password == "" {
-		password = "postgres"
-	}
-
-	database := os.Getenv("DB_NAME")
-	if database == "" {
-		database = "chatapp"
-	}
-
-	sslMode := os.Getenv("DB_SSLMODE")
-	if sslMode == "" {
-		sslMode = "disable"
-	}
-
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, user, password, database, sslMode)
+// GetDB returns the underlying database connection
+// This is used by methods that need direct access to *sql.DB
+func (p *PostgresDB) GetDB() *sql.DB {
+	return p.conn
 }
 
 // createTables creates the necessary database tables
-func createTables() error {
-	db := GetDB()
+func (p *PostgresDB) createTables() error {
+	db := p.conn
 
 	// Create users table
 	usersTableSQL := `

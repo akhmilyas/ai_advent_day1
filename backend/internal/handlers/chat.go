@@ -622,7 +622,7 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	logger.Log.WithField("username", username).Info("Get conversations request")
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.config.DB.GetUserByUsername(username)
 	if err != nil {
 		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
@@ -670,7 +670,7 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get conversation messages request")
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.config.DB.GetUserByUsername(username)
 	if err != nil {
 		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
@@ -731,7 +731,7 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Delete conversation request")
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.config.DB.GetUserByUsername(username)
 	if err != nil {
 		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
@@ -863,7 +863,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 	}
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.config.DB.GetUserByUsername(username)
 	if err != nil {
 		logger.Log.WithError(err).Error("Error getting user for summarization")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
@@ -985,7 +985,7 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get summaries request")
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.config.DB.GetUserByUsername(username)
 	if err != nil {
 		logger.Log.WithError(err).Error("Error getting user for summaries request")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)

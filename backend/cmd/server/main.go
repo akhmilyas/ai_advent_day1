@@ -39,10 +39,11 @@ func main() {
 
 	// Initialize database with config
 	logger.Log.Info("Initializing database")
-	if err := db.InitDBWithConfig(appConfig.Database); err != nil {
+	database, err := db.NewPostgresDB(appConfig.Database)
+	if err != nil {
 		logger.Log.WithError(err).Fatal("Failed to initialize database")
 	}
-	defer db.CloseDB()
+	defer database.Close()
 
 	// Load War and Peace text
 	logger.Log.Info("Loading War and Peace context")
@@ -52,12 +53,9 @@ func main() {
 	}
 
 	// Seed demo user
-	if err := db.SeedDemoUser(); err != nil {
+	if err := db.SeedDemoUser(database); err != nil {
 		logger.Log.WithError(err).Fatal("Failed to seed demo user")
 	}
-
-	// Create database instance
-	database := db.NewPostgresDB()
 
 	// Initialize application config with database and centralized config
 	appConfiguration := app.NewConfig(database, appConfig)
@@ -76,8 +74,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	}
 
-	// Create auth handlers with config
-	authHandler := auth.NewAuthHandlers(appConfig)
+	// Create auth handlers with config and database
+	authHandler := auth.NewAuthHandlers(appConfig, database)
 
 	// Public routes
 	mux.HandleFunc("POST /api/login", enableCORS(authHandler.LoginHandler))

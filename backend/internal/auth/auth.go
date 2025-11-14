@@ -22,13 +22,15 @@ const UserContextKey contextKey = "user"
 // AuthHandlers holds handlers with configuration
 type AuthHandlers struct {
 	config    *config.AppConfig
+	db        db.Database
 	validator *validation.AuthRequestValidator
 }
 
 // NewAuthHandlers creates auth handlers with config
-func NewAuthHandlers(appConfig *config.AppConfig) *AuthHandlers {
+func NewAuthHandlers(appConfig *config.AppConfig, database db.Database) *AuthHandlers {
 	return &AuthHandlers{
 		config:    appConfig,
+		db:        database,
 		validator: validation.NewAuthRequestValidator(),
 	}
 }
@@ -138,7 +140,7 @@ func (h *AuthHandlers) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user from database
-	user, err := db.GetUserByUsername(req.Username)
+	user, err := h.db.GetUserByUsername(req.Username)
 	if err != nil {
 		logger.Log.WithFields(logrus.Fields{
 			"username": req.Username,
@@ -196,7 +198,7 @@ func (h *AuthHandlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create user in database
-	user, err := db.CreateUser(req.Username, req.Email, req.Password)
+	user, err := h.db.CreateUser(req.Username, req.Email, req.Password)
 	if err != nil {
 		logger.Log.WithFields(logrus.Fields{
 			"username": req.Username,

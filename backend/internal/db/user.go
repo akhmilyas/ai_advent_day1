@@ -21,7 +21,7 @@ type User struct {
 
 // CreateUser creates a new user with hashed password
 func (p *PostgresDB) CreateUser(username, email, password string) (*User, error) {
-	db := p.db
+	db := p.conn
 
 	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -58,7 +58,7 @@ func (p *PostgresDB) CreateUser(username, email, password string) (*User, error)
 
 // GetUserByUsername retrieves a user by username
 func (p *PostgresDB) GetUserByUsername(username string) (*User, error) {
-	db := p.db
+	db := p.conn
 
 	var user User
 	query := `SELECT id, username, email, password_hash, created_at FROM users WHERE username = $1`
@@ -81,8 +81,7 @@ func (u *User) VerifyPassword(password string) bool {
 }
 
 // SeedDemoUser creates the demo user if it doesn't exist
-func SeedDemoUser() error {
-	db := NewPostgresDB()
+func SeedDemoUser(db Database) error {
 	// Check if demo user already exists
 	_, err := db.GetUserByUsername("demo")
 	if err == nil {
@@ -98,17 +97,4 @@ func SeedDemoUser() error {
 
 	logger.Log.Info("Demo user seeded successfully")
 	return nil
-}
-
-// Standalone function wrappers for backwards compatibility
-// These can be removed once all code is migrated to use the Database interface
-
-func CreateUser(username, email, password string) (*User, error) {
-	db := NewPostgresDB()
-	return db.CreateUser(username, email, password)
-}
-
-func GetUserByUsername(username string) (*User, error) {
-	db := NewPostgresDB()
-	return db.GetUserByUsername(username)
 }
