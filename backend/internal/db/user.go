@@ -1,11 +1,12 @@
 package db
 
 import (
+	"chat-app/internal/logger"
 	"database/sql"
 	"fmt"
-	"log"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -45,7 +46,7 @@ func (p *PostgresDB) CreateUser(username, email, password string) (*User, error)
 		return nil, fmt.Errorf("error creating user: %w", err)
 	}
 
-	log.Printf("[DB] Created new user: %s (id: %s)", username, userID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "user_id": userID}).Info("Created new user")
 
 	return &User{
 		ID:        userID,
@@ -85,7 +86,7 @@ func SeedDemoUser() error {
 	// Check if demo user already exists
 	_, err := db.GetUserByUsername("demo")
 	if err == nil {
-		log.Printf("[DB] Demo user already exists, skipping seed")
+		logger.Log.Info("Demo user already exists, skipping seed")
 		return nil
 	}
 
@@ -95,7 +96,7 @@ func SeedDemoUser() error {
 		return fmt.Errorf("error seeding demo user: %w", err)
 	}
 
-	log.Printf("[DB] Demo user seeded successfully")
+	logger.Log.Info("Demo user seeded successfully")
 	return nil
 }
 

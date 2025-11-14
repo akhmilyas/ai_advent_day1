@@ -2,11 +2,12 @@ package db
 
 import (
 	"chat-app/internal/llm"
+	"chat-app/internal/logger"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // Conversation represents a conversation in the database
@@ -73,7 +74,7 @@ func (p *PostgresDB) CreateConversation(userID string, title string, responseFor
 		return nil, fmt.Errorf("error creating conversation: %w", err)
 	}
 
-	log.Printf("[DB] Created new conversation: %s for user: %s with format: %s", convID, userID, responseFormat)
+	logger.Log.WithFields(logrus.Fields{"conversation_id": convID, "user_id": userID, "format": responseFormat}).Info("Created new conversation")
 
 	return &Conversation{
 		ID:             convID,
@@ -155,7 +156,7 @@ func (p *PostgresDB) AddMessage(conversationID string, role, content, model stri
 	// Update conversation updated_at timestamp
 	updateQuery := `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`
 	if _, err := db.Exec(updateQuery, conversationID); err != nil {
-		log.Printf("[DB] Warning: error updating conversation timestamp: %v", err)
+		logger.Log.WithError(err).Warn("Error updating conversation timestamp")
 	}
 
 	tempStr := "nil"
@@ -182,7 +183,16 @@ func (p *PostgresDB) AddMessage(conversationID string, role, content, model stri
 	if providerStr == "" {
 		providerStr = "unknown"
 	}
-	log.Printf("[DB] Added message to conversation %s with provider %s, model %s, temperature %s, tokens %s, cost %s, latency %s, generation_time %s", conversationID, providerStr, model, tempStr, tokensStr, costStr, latencyStr, genTimeStr)
+	logger.Log.WithFields(logrus.Fields{
+		"conversation_id": conversationID,
+		"provider": providerStr,
+		"model": model,
+		"temperature": tempStr,
+		"tokens": tokensStr,
+		"cost": costStr,
+		"latency": latencyStr,
+		"generation_time": genTimeStr,
+	}).Debug("Added message to conversation")
 
 	return &Message{
 		ID:               msgID,
@@ -276,7 +286,7 @@ func (p *PostgresDB) DeleteConversation(convID string) error {
 		return fmt.Errorf("error deleting conversation: %w", err)
 	}
 
-	log.Printf("[DB] Deleted conversation: %s", convID)
+	logger.Log.WithField("conversation_id", convID).Info("Deleted conversation")
 	return nil
 }
 
@@ -298,7 +308,7 @@ func (p *PostgresDB) CreateSummary(conversationID string, summaryContent string,
 		return nil, fmt.Errorf("error creating summary: %w", err)
 	}
 
-	log.Printf("[DB] Created summary %s for conversation %s", summaryID, conversationID)
+	logger.Log.WithFields(logrus.Fields{"summary_id": summaryID, "conversation_id": conversationID}).Info("Created summary")
 
 	return &ConversationSummary{
 		ID:                      summaryID,
@@ -335,8 +345,12 @@ func (p *PostgresDB) GetActiveSummary(conversationID string) (*ConversationSumma
 		return nil, err // Return nil if no summary exists
 	}
 
-	log.Printf("[DB] Retrieved most recent summary %s (created: %s, usage_count: %d) for conversation %s",
-		summary.ID, summary.CreatedAt.Format(time.RFC3339), summary.UsageCount, conversationID)
+	logger.Log.WithFields(logrus.Fields{
+		"summary_id":      summary.ID,
+		"created_at":      summary.CreatedAt.Format(time.RFC3339),
+		"usage_count":     summary.UsageCount,
+		"conversation_id": conversationID,
+	}).Debug("Retrieved most recent summary")
 
 	return &summary, nil
 }
@@ -374,7 +388,7 @@ func (p *PostgresDB) GetAllSummaries(conversationID string) ([]ConversationSumma
 		summaries = append(summaries, summary)
 	}
 
-	log.Printf("[DB] Retrieved %d summaries for conversation %s", len(summaries), conversationID)
+	logger.Log.WithFields(logrus.Fields{"count": len(summaries), "conversation_id": conversationID}).Debug("Retrieved summaries")
 	return summaries, nil
 }
 
@@ -388,7 +402,7 @@ func (p *PostgresDB) UpdateConversationActiveSummary(conversationID string, summ
 		return fmt.Errorf("error updating active summary: %w", err)
 	}
 
-	log.Printf("[DB] Updated active summary for conversation %s to %s", conversationID, summaryID)
+	logger.Log.WithFields(logrus.Fields{"conversation_id": conversationID, "summary_id": summaryID}).Info("Updated active summary")
 	return nil
 }
 
@@ -402,7 +416,7 @@ func (p *PostgresDB) IncrementSummaryUsageCount(summaryID string) error {
 		return fmt.Errorf("error incrementing summary usage count: %w", err)
 	}
 
-	log.Printf("[DB] Incremented usage count for summary %s", summaryID)
+	logger.Log.WithField("summary_id", summaryID).Debug("Incremented usage count for summary")
 	return nil
 }
 

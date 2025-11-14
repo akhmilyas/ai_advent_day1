@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 )
 
 // Model represents an available LLM model
@@ -57,38 +56,4 @@ func (mc *ModelsConfig) GetDefaultModel() string {
 	}
 	// Fallback in case no models are configured (shouldn't happen)
 	return "meta-llama/llama-3.3-8b-instruct:free"
-}
-
-// Legacy global functions for backward compatibility
-var globalModelsConfig *ModelsConfig
-
-// LoadModels loads the available models from the config file (legacy)
-func LoadModels(configPath string) error {
-	config, err := NewModelsConfig(configPath)
-	if err != nil {
-		return err
-	}
-	globalModelsConfig = config
-	return nil
-}
-
-// GetAvailableModels returns the list of available models (legacy)
-func GetAvailableModels() []Model {
-	if globalModelsConfig == nil {
-		return []Model{}
-	}
-	return globalModelsConfig.GetAvailableModels()
-}
-
-// IsValidModel checks if a model ID is in the list of available models (legacy)
-func IsValidModel(modelID string) bool {
-	if globalModelsConfig == nil {
-		return false
-	}
-	return globalModelsConfig.IsValidModel(modelID)
-}
-
-// GetDefaultModelPath returns the default path to the models config file
-func GetDefaultModelPath() string {
-	return filepath.Join("backend", "config", "models.json")
 }

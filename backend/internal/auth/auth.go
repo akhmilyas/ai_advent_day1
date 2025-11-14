@@ -1,39 +1,43 @@
 package auth
 
 import (
+	"chat-app/internal/config"
 	"chat-app/internal/db"
+	"chat-app/internal/logger"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/sirupsen/logrus"
 )
 
 type contextKey string
 
 const UserContextKey contextKey = "user"
 
-var jwtSecret []byte
+// AuthHandlers holds handlers with configuration
+type AuthHandlers struct {
+	config *config.AppConfig
+}
 
-// getJWTSecret retrieves and validates the JWT secret from environment variable
-func getJWTSecret() []byte {
-	if jwtSecret != nil {
-		return jwtSecret
+// NewAuthHandlers creates auth handlers with config
+func NewAuthHandlers(appConfig *config.AppConfig) *AuthHandlers {
+	return &AuthHandlers{
+		config: appConfig,
 	}
+}
 
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		log.Fatal("JWT_SECRET environment variable must be set")
-	}
-	if len(secret) < 32 {
-		log.Fatal("JWT_SECRET must be at least 32 characters")
-	}
-	jwtSecret = []byte(secret)
-	return jwtSecret
+// getJWTSecret retrieves the JWT secret from config
+func (h *AuthHandlers) getJWTSecret() []byte {
+	return h.config.Auth.JWTSecret
+}
+
+// getTokenExpiration retrieves token expiration from config
+func (h *AuthHandlers) getTokenExpiration() time.Duration {
+	return h.config.Auth.TokenExpiration
 }
 
 type Claims struct {
@@ -82,22 +86,22 @@ func sendError(w http.ResponseWriter, status int, message string, err error) {
 	json.NewEncoder(w).Encode(errResp)
 }
 
-func GenerateToken(username string) (string, error) {
+func (h *AuthHandlers) GenerateToken(username string) (string, error) {
 	claims := Claims{
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(h.getTokenExpiration())),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(getJWTSecret())
+	return token.SignedString(h.getJWTSecret())
 }
 
-func ValidateToken(tokenString string) (*Claims, error) {
+func (h *AuthHandlers) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return getJWTSecret(), nil
+		return h.getJWTSecret(), nil
 	})
 
 	if err != nil {
@@ -112,7 +116,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 }
 
 // LoginHandler authenticates user and returns JWT token
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandlers) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
@@ -132,34 +136,44 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Get user from database
 	user, err := db.GetUserByUsername(req.Username)
 	if err != nil {
-		log.Printf("[AUTH] Login failed for user %s: user not found", req.Username)
+		logger.Log.WithFields(logrus.Fields{
+			"username": req.Username,
+			"error":    err.Error(),
+		}).Warn("Login failed: user not found")
 		sendError(w, http.StatusUnauthorized, "Invalid credentials", nil)
 		return
 	}
 
 	// Verify password
 	if !user.VerifyPassword(req.Password) {
-		log.Printf("[AUTH] Login failed for user %s: invalid password", req.Username)
+		logger.Log.WithFields(logrus.Fields{
+			"username": req.Username,
+		}).Warn("Login failed: invalid password")
 		sendError(w, http.StatusUnauthorized, "Invalid credentials", nil)
 		return
 	}
 
 	// Generate JWT token
-	token, err := GenerateToken(req.Username)
+	token, err := h.GenerateToken(req.Username)
 	if err != nil {
-		log.Printf("[AUTH] Error generating token: %v", err)
+		logger.Log.WithFields(logrus.Fields{
+			"username": req.Username,
+			"error":    err.Error(),
+		}).Error("Error generating token")
 		sendError(w, http.StatusInternalServerError, "Error generating token", err)
 		return
 	}
 
-	log.Printf("[AUTH] User %s logged in successfully", req.Username)
+	logger.Log.WithFields(logrus.Fields{
+		"username": req.Username,
+	}).Info("User logged in successfully")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(LoginResponse{Token: token})
 }
 
 // RegisterHandler creates a new user account
-func RegisterHandler(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
@@ -184,7 +198,10 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	// Create user in database
 	user, err := db.CreateUser(req.Username, req.Email, req.Password)
 	if err != nil {
-		log.Printf("[AUTH] Registration failed for user %s: %v", req.Username, err)
+		logger.Log.WithFields(logrus.Fields{
+			"username": req.Username,
+			"error":    err.Error(),
+		}).Warn("Registration failed")
 		if err.Error() == "username already exists" {
 			sendError(w, http.StatusConflict, "Username already exists", err)
 			return
@@ -194,14 +211,20 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate JWT token
-	token, err := GenerateToken(user.Username)
+	token, err := h.GenerateToken(user.Username)
 	if err != nil {
-		log.Printf("[AUTH] Error generating token: %v", err)
+		logger.Log.WithFields(logrus.Fields{
+			"username": user.Username,
+			"error":    err.Error(),
+		}).Error("Error generating token")
 		sendError(w, http.StatusInternalServerError, "Error generating token", err)
 		return
 	}
 
-	log.Printf("[AUTH] User %s registered successfully", user.Username)
+	logger.Log.WithFields(logrus.Fields{
+		"username": user.Username,
+		"email":    user.Email,
+	}).Info("User registered successfully")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -211,7 +234,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (h *AuthHandlers) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -225,7 +248,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		claims, err := ValidateToken(bearerToken[1])
+		claims, err := h.ValidateToken(bearerToken[1])
 		if err != nil {
 			sendError(w, http.StatusUnauthorized, "Invalid token", err)
 			return

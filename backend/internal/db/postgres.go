@@ -1,9 +1,10 @@
 package db
 
 import (
+	"chat-app/internal/config"
+	"chat-app/internal/logger"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 
@@ -31,11 +32,12 @@ func GetDB() *sql.DB {
 }
 
 // InitDB initializes the database connection and creates tables
+// Deprecated: Use InitDBWithConfig instead
 func InitDB() error {
 	var err error
 	once.Do(func() {
 		dsn := getDSN()
-		log.Printf("[DB] Connecting to PostgreSQL: %s", dsn)
+		logger.Log.WithField("dsn", dsn).Info("Connecting to PostgreSQL")
 
 		instance, err = sql.Open("postgres", dsn)
 		if err != nil {
@@ -49,7 +51,7 @@ func InitDB() error {
 			return
 		}
 
-		log.Printf("[DB] Successfully connected to PostgreSQL")
+		logger.Log.Info("Successfully connected to PostgreSQL")
 
 		// Create tables
 		if err = createTables(); err != nil {
@@ -57,7 +59,40 @@ func InitDB() error {
 			return
 		}
 
-		log.Printf("[DB] Tables created/verified")
+		logger.Log.Info("Tables created/verified")
+	})
+
+	return err
+}
+
+// InitDBWithConfig initializes the database connection using provided config
+func InitDBWithConfig(dbConfig config.DatabaseConfig) error {
+	var err error
+	once.Do(func() {
+		dsn := dbConfig.GetDSN()
+		logger.Log.WithField("dsn", dsn).Info("Connecting to PostgreSQL")
+
+		instance, err = sql.Open("postgres", dsn)
+		if err != nil {
+			err = fmt.Errorf("error opening database: %w", err)
+			return
+		}
+
+		// Test the connection
+		if err = instance.Ping(); err != nil {
+			err = fmt.Errorf("error connecting to database: %w", err)
+			return
+		}
+
+		logger.Log.Info("Successfully connected to PostgreSQL")
+
+		// Create tables
+		if err = createTables(); err != nil {
+			err = fmt.Errorf("error creating tables: %w", err)
+			return
+		}
+
+		logger.Log.Info("Tables created/verified")
 	})
 
 	return err

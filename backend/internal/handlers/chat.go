@@ -7,12 +7,13 @@ import (
 	"chat-app/internal/context"
 	"chat-app/internal/db"
 	"chat-app/internal/llm"
+	"chat-app/internal/logger"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 type ChatRequest struct {
@@ -118,6 +119,14 @@ func NewChatHandlers(config *app.Config) *ChatHandlers {
 	}
 }
 
+// createLLMProvider creates an LLM provider with configuration
+func (ch *ChatHandlers) createLLMProvider() *llm.OpenRouterProvider {
+	return llm.NewOpenRouterProvider(
+		&ch.config.AppConfig.LLM,
+		ch.config.AppConfig.Models,
+	)
+}
+
 // Helper functions for common operations
 
 // sendError sends a standardized JSON error response
@@ -167,7 +176,7 @@ func (ch *ChatHandlers) validateConversationOwnership(conversation *db.Conversat
 
 // validateModel checks if the provided model ID is valid
 func (ch *ChatHandlers) validateModel(modelID string) error {
-	if modelID != "" && !ch.config.ModelsConfig.IsValidModel(modelID) {
+	if modelID != "" && !ch.config.ModelsConfig().IsValidModel(modelID) {
 		return fmt.Errorf("invalid model specified")
 	}
 	return nil
@@ -181,7 +190,7 @@ func (ch *ChatHandlers) getConversationHistory(conversationID string) ([]llm.Mes
 
 	if err == nil && activeSummary != nil {
 		// Active summary exists - use it instead of full history
-		log.Printf("[CHAT] Using active summary (usage count: %d)", activeSummary.UsageCount)
+		logger.Log.WithField("usage_count", activeSummary.UsageCount).Info("Using active summary")
 
 		// Get messages after the summarized point
 		if activeSummary.SummarizedUpToMessageID != nil {
@@ -190,16 +199,16 @@ func (ch *ChatHandlers) getConversationHistory(conversationID string) ([]llm.Mes
 				return nil, nil, fmt.Errorf("error getting messages after summary: %w", err)
 			}
 			currentHistory = newMessages
-			log.Printf("[CHAT] Using summary + %d new messages", len(newMessages))
+			logger.Log.WithField("new_message_count", len(newMessages)).Debug("Using summary with new messages")
 		} else {
 			// No messages after summary (shouldn't happen, but handle gracefully)
 			currentHistory = []llm.Message{}
-			log.Printf("[CHAT] Using summary with no new messages")
+			logger.Log.Debug("Using summary with no new messages")
 		}
 
 		// Increment summary usage count
 		if err := ch.config.DB.IncrementSummaryUsageCount(activeSummary.ID); err != nil {
-			log.Printf("[CHAT] Warning: failed to increment summary usage count: %v", err)
+			logger.Log.WithError(err).Warn("Failed to increment summary usage count")
 		}
 
 		return currentHistory, activeSummary, nil
@@ -210,7 +219,7 @@ func (ch *ChatHandlers) getConversationHistory(conversationID string) ([]llm.Mes
 	if err != nil {
 		return nil, nil, fmt.Errorf("error getting conversation history: %w", err)
 	}
-	log.Printf("[CHAT] Using full conversation history: %d messages", len(currentHistory))
+	logger.Log.WithField("message_count", len(currentHistory)).Debug("Using full conversation history")
 
 	return currentHistory, nil, nil
 }
@@ -223,7 +232,7 @@ func (ch *ChatHandlers) buildSystemPrompt(conversation *db.Conversation, activeS
 	summaryContext := ""
 	if activeSummary != nil {
 		summaryContext = fmt.Sprintf("Previous conversation summary:\n%s\n\n", activeSummary.SummaryContent)
-		log.Printf("[CHAT] Using summary as context with user prompt")
+		logger.Log.Debug("Using summary as context with user prompt")
 	}
 
 	// Build format-specific system prompt
@@ -248,7 +257,7 @@ func (ch *ChatHandlers) buildSystemPrompt(conversation *db.Conversation, activeS
 func (ch *ChatHandlers) appendWarAndPeaceContext(systemPrompt string, percent int) string {
 	warAndPeaceText := context.GetWarAndPeace()
 	if warAndPeaceText == "" {
-		log.Printf("[CHAT] Warning: War and Peace text not loaded")
+		logger.Log.Warn("War and Peace text not loaded")
 		return systemPrompt
 	}
 
@@ -264,10 +273,11 @@ func (ch *ChatHandlers) appendWarAndPeaceContext(systemPrompt string, percent in
 	// Get the substring from the beginning
 	textToAppend := warAndPeaceText[:charsToInclude]
 
-	log.Printf("[CHAT] Appended War and Peace context: %d%% (%.2f MB of %.2f MB)",
-		percent,
-		float64(len(textToAppend))/1024/1024,
-		float64(totalChars)/1024/1024)
+	logger.Log.WithFields(logrus.Fields{
+		"percent": percent,
+		"size_mb": float64(len(textToAppend))/1024/1024,
+		"total_mb": float64(totalChars)/1024/1024,
+	}).Info("Appended War and Peace context")
 
 	return systemPrompt + "\n\nContext (War and Peace by Leo Tolstoy):\n" + textToAppend
 }
@@ -280,7 +290,9 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	username := r.Context().Value(auth.UserContextKey).(string)
-	log.Printf("Chat request from user: %s", username)
+	logger.Log.WithFields(logrus.Fields{
+		"username": username,
+	}).Info("Chat request received")
 
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -293,12 +305,15 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[CHAT] User input: %s", req.Message)
+	logger.Log.WithFields(logrus.Fields{
+		"username":      username,
+		"message_chars": len(req.Message),
+	}).Info("Processing chat message")
 
 	// Get user from database
 	user, err := ch.getUserFromContext(r)
 	if err != nil {
-		log.Printf("[CHAT] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -306,7 +321,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Get or create conversation
 	conversation, err := ch.getOrCreateConversation(&req, user.ID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting/creating conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting/creating conversation")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -327,7 +342,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
 	if _, err := ch.config.DB.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
-		log.Printf("[CHAT] Error adding user message: %v", err)
+		logger.Log.WithError(err).Error("Error adding user message")
 		ch.sendError(w, http.StatusInternalServerError, "Error saving message", err)
 		return
 	}
@@ -335,26 +350,26 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Get conversation history
 	currentHistory, err := ch.config.DB.GetConversationMessages(conversation.ID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting conversation history: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversation history")
 		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversation history", err)
 		return
 	}
 
-	log.Printf("[CHAT] Conversation history length: %d messages", len(currentHistory))
+	logger.Log.WithField("message_count", len(currentHistory)).Debug("Retrieved conversation history")
 
-	// Get LLM provider based on request
-	provider := llm.GetProviderFromString(req.Provider)
-	log.Printf("[CHAT] Using provider: %T", provider)
+	// Get LLM provider with config
+	provider := ch.createLLMProvider()
+	logger.Log.WithField("provider_type", fmt.Sprintf("%T", provider)).Debug("Using LLM provider")
 
 	// Get response with full conversation history
 	response, err := provider.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, req.Model, req.Temperature)
 	if err != nil {
-		log.Printf("[CHAT] Error from LLM: %v", err)
+		logger.Log.WithError(err).Error("Error from LLM")
 		ch.sendError(w, http.StatusInternalServerError, "Error from LLM provider", err)
 		return
 	}
 
-	log.Printf("[CHAT] LLM response: %s", response)
+	logger.Log.WithField("response_chars", len(response)).Debug("Received LLM response")
 
 	// Determine which model was actually used
 	usedModel := req.Model
@@ -364,7 +379,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add assistant response to database with model, temperature, and provider (no usage data for non-streaming)
 	if _, err := ch.config.DB.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, req.Provider, "", nil, nil, nil, nil, nil, nil); err != nil {
-		log.Printf("[CHAT] Error adding assistant message: %v", err)
+		logger.Log.WithError(err).Error("Error adding assistant message")
 		ch.sendError(w, http.StatusInternalServerError, "Error saving response", err)
 		return
 	}
@@ -385,7 +400,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	username := r.Context().Value(auth.UserContextKey).(string)
-	log.Printf("Chat stream request from user: %s", username)
+	logger.Log.WithField("username", username).Info("Chat stream request received")
 
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -398,12 +413,12 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	log.Printf("[CHAT] User input (stream): %s", req.Message)
+	logger.Log.WithField("message_chars", len(req.Message)).Debug("Processing stream message")
 
 	// Get user from database
 	user, err := ch.getUserFromContext(r)
 	if err != nil {
-		log.Printf("[CHAT] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -411,7 +426,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Get or create conversation
 	conversation, err := ch.getOrCreateConversation(&req, user.ID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting/creating conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting/creating conversation")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -432,7 +447,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
 	if _, err := ch.config.DB.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
-		log.Printf("[CHAT] Error adding user message: %v", err)
+		logger.Log.WithError(err).Error("Error adding user message")
 		ch.sendError(w, http.StatusInternalServerError, "Error saving message", err)
 		return
 	}
@@ -440,7 +455,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Get conversation history (considering summaries)
 	currentHistory, activeSummary, err := ch.getConversationHistory(conversation.ID)
 	if err != nil {
-		log.Printf("[CHAT] %v", err)
+		logger.Log.WithError(err).Error("Error retrieving conversation history")
 		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversation history", err)
 		return
 	}
@@ -459,16 +474,16 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Build the system prompt based on conversation's response format (stored in DB)
 	effectiveSystemPrompt := ch.buildSystemPrompt(conversation, activeSummary, req.SystemPrompt, req.UseWarAndPeace, req.WarAndPeacePercent)
-	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
+	logger.Log.WithField("format", conversation.ResponseFormat).Debug("Using conversation format")
 
-	// Get LLM provider based on request
-	provider := llm.GetProviderFromString(req.Provider)
-	log.Printf("[CHAT] Using provider for streaming: %T", provider)
+	// Get LLM provider with config
+	provider := ch.createLLMProvider()
+	logger.Log.WithField("provider_type", fmt.Sprintf("%T", provider)).Debug("Using LLM provider for streaming")
 
 	// Get streaming response from LLM
 	chunks, err := provider.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, req.Model, req.Temperature)
 	if err != nil {
-		log.Printf("[CHAT] Error from LLM stream: %v", err)
+		logger.Log.WithError(err).Error("Error from LLM stream")
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
 		return
 	}
@@ -476,7 +491,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Send conversation ID as first event
 	fmt.Fprintf(w, "data: CONV_ID:%s\n\n", conversation.ID)
 	flusher.Flush()
-	log.Printf("[CHAT] Sent conversation ID: %s", conversation.ID)
+	logger.Log.WithField("conversation_id", conversation.ID).Debug("Sent conversation ID to client")
 
 	// Determine which model was actually used
 	usedModel := req.Model
@@ -487,13 +502,13 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	// Send model as second event
 	fmt.Fprintf(w, "data: MODEL:%s\n\n", usedModel)
 	flusher.Flush()
-	log.Printf("[CHAT] Sent model: %s", usedModel)
+	logger.Log.WithField("model", usedModel).Debug("Sent model to client")
 
 	// Send temperature as third event
 	if req.Temperature != nil {
 		fmt.Fprintf(w, "data: TEMPERATURE:%.2f\n\n", *req.Temperature)
 		flusher.Flush()
-		log.Printf("[CHAT] Sent temperature: %.2f", *req.Temperature)
+		logger.Log.WithField("temperature", *req.Temperature).Debug("Sent temperature to client")
 	}
 
 	// Buffer to accumulate the full response and metadata
@@ -519,7 +534,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 			// Send chunk as SSE event
 			fmt.Fprintf(w, "data: %s\n\n", escapedChunk)
 			flusher.Flush()
-			log.Printf("[CHAT] Sent chunk: %q", streamChunk.Content)
+			logger.Log.WithField("chunk_chars", len(streamChunk.Content)).Debug("Sent content chunk")
 		}
 	}
 
@@ -529,7 +544,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	var latency, generationTime *int
 
 	if generationID != "" {
-		log.Printf("[CHAT] Fetching generation cost for ID: %s", generationID)
+		logger.Log.WithField("generation_id", generationID).Debug("Fetching generation cost")
 		if genData, err := provider.FetchGenerationCost(generationID); err == nil {
 			totalCost = &genData.TotalCost
 			// Use native tokens instead of regular tokens
@@ -544,9 +559,14 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 			fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,\"total_cost\":%.6f,\"latency\":%d,\"generation_time\":%d}\n\n",
 				*promptTokens, *completionTokens, *totalTokens, *totalCost, *latency, *generationTime)
 			flusher.Flush()
-			log.Printf("[CHAT] Sent usage data: tokens=%d, cost=$%.6f, latency=%dms, generation_time=%dms", *totalTokens, *totalCost, *latency, *generationTime)
+			logger.Log.WithFields(logrus.Fields{
+			"total_tokens": *totalTokens,
+			"cost": *totalCost,
+			"latency_ms": *latency,
+			"generation_time_ms": *generationTime,
+		}).Debug("Sent usage data to client")
 		} else {
-			log.Printf("[CHAT] Error fetching generation cost: %v", err)
+			logger.Log.WithError(err).Warn("Error fetching generation cost")
 			// Fallback to usage data from streaming response if available
 			if usage != nil {
 				promptTokens = &usage.PromptTokens
@@ -557,7 +577,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 				fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}\n\n",
 					*promptTokens, *completionTokens, *totalTokens)
 				flusher.Flush()
-				log.Printf("[CHAT] Sent usage data (no cost): tokens=%d", *totalTokens)
+				logger.Log.WithField("total_tokens", *totalTokens).Debug("Sent usage data to client (no cost)")
 			}
 		}
 	} else if usage != nil {
@@ -570,16 +590,16 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}\n\n",
 			*promptTokens, *completionTokens, *totalTokens)
 		flusher.Flush()
-		log.Printf("[CHAT] Sent usage data (no cost): tokens=%d", *totalTokens)
+		logger.Log.WithField("total_tokens", *totalTokens).Debug("Sent usage data to client (no cost)")
 	}
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
 		if _, err := ch.config.DB.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature, req.Provider,
 			generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime); err != nil {
-			log.Printf("[CHAT] Error adding assistant message: %v", err)
+			logger.Log.WithError(err).Error("Error adding assistant message")
 		}
-		log.Printf("[CHAT] Full LLM response: %s", fullResponse)
+		logger.Log.WithField("response_chars", len(fullResponse)).Debug("Completed streaming response")
 	}
 
 	// Send completion marker
@@ -595,12 +615,12 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	}
 
 	username := r.Context().Value(auth.UserContextKey).(string)
-	log.Printf("Get conversations request from user: %s", username)
+	logger.Log.WithField("username", username).Info("Get conversations request")
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
-		log.Printf("[CHAT] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -608,7 +628,7 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	// Get all conversations for user
 	conversations, err := ch.config.DB.GetConversationsByUser(user.ID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting conversations: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversations")
 		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversations", err)
 		return
 	}
@@ -643,12 +663,12 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(auth.UserContextKey).(string)
 	convID := r.PathValue("id")
-	log.Printf("Get conversation messages request from user: %s for conversation: %s", username, convID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get conversation messages request")
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
-		log.Printf("[CHAT] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -656,7 +676,7 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	// Get conversation and verify ownership
 	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversation")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -670,7 +690,7 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	// Get messages for conversation
 	messages, err := ch.config.DB.GetConversationMessagesWithDetails(convID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting messages: %v", err)
+		logger.Log.WithError(err).Error("Error getting messages")
 		ch.sendError(w, http.StatusInternalServerError, "Error retrieving messages", err)
 		return
 	}
@@ -704,12 +724,12 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(auth.UserContextKey).(string)
 	convID := r.PathValue("id")
-	log.Printf("Delete conversation request from user: %s for conversation: %s", username, convID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Delete conversation request")
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
-		log.Printf("[CHAT] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -717,7 +737,7 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 	// Get conversation and verify ownership
 	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
-		log.Printf("[CHAT] Error getting conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversation")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -730,7 +750,7 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 
 	// Delete the conversation
 	if err := ch.config.DB.DeleteConversation(convID); err != nil {
-		log.Printf("[CHAT] Error deleting conversation: %v", err)
+		logger.Log.WithError(err).Error("Error deleting conversation")
 		ch.sendError(w, http.StatusInternalServerError, "Error deleting conversation", err)
 		return
 	}
@@ -749,7 +769,7 @@ func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	models := ch.config.ModelsConfig.GetAvailableModels()
+	models := ch.config.ModelsConfig().GetAvailableModels()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ModelsResponse{
@@ -766,7 +786,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 
 	username := r.Context().Value(auth.UserContextKey).(string)
 	convID := r.PathValue("id")
-	log.Printf("Summarize conversation request from user: %s for conversation: %s", username, convID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Summarize conversation request")
 
 	var req SummarizeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -778,7 +798,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
-		log.Printf("[SUMMARIZE] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user for summarization")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -786,7 +806,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 	// Get conversation and verify ownership
 	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
-		log.Printf("[SUMMARIZE] Error getting conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversation for summarization")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -804,10 +824,10 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 
 	if err != nil || activeSummary == nil {
 		// No active summary exists - summarize all messages
-		log.Printf("[SUMMARIZE] No active summary found, summarizing all messages")
+		logger.Log.Info("No active summary found, summarizing all messages")
 		messagesToSummarize, err = ch.config.DB.GetConversationMessages(convID)
 		if err != nil {
-			log.Printf("[SUMMARIZE] Error getting conversation messages: %v", err)
+			logger.Log.WithError(err).Error("Error getting conversation messages for summarization")
 			ch.sendError(w, http.StatusInternalServerError, "Error retrieving messages", err)
 			return
 		}
@@ -815,13 +835,13 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		// Get the last message ID
 		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
 		if err != nil {
-			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
+			logger.Log.WithError(err).Error("Error getting last message ID")
 			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
 			return
 		}
 	} else if activeSummary.UsageCount >= 2 {
 		// Summary has been used 2+ times - create new summary from old summary + new messages
-		log.Printf("[SUMMARIZE] Active summary used %d times, creating new summary", activeSummary.UsageCount)
+		logger.Log.WithField("usage_count", activeSummary.UsageCount).Info("Creating new summary from active summary")
 
 		// Start with the old summary as a "system" message
 		messagesToSummarize = []llm.Message{
@@ -832,7 +852,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		if activeSummary.SummarizedUpToMessageID != nil {
 			newMessages, err := ch.config.DB.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
 			if err != nil {
-				log.Printf("[SUMMARIZE] Error getting messages after last summarized: %v", err)
+				logger.Log.WithError(err).Error("Error getting messages after last summarized")
 				ch.sendError(w, http.StatusInternalServerError, "Error retrieving new messages", err)
 				return
 			}
@@ -842,13 +862,13 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		// Get the last message ID
 		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
 		if err != nil {
-			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
+			logger.Log.WithError(err).Error("Error getting last message ID")
 			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
 			return
 		}
 	} else {
 		// Summary exists but hasn't been used enough yet - don't create new summary
-		log.Printf("[SUMMARIZE] Active summary exists with usage count %d, not creating new summary", activeSummary.UsageCount)
+		logger.Log.WithField("usage_count", activeSummary.UsageCount).Info("Active summary exists, not creating new summary")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(SummarizeResponse{
 			Summary:             activeSummary.SummaryContent,
@@ -864,11 +884,11 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Get LLM provider (always use openrouter for summarization)
-	provider := llm.NewOpenRouterProvider()
+	// Get LLM provider with config
+	provider := ch.createLLMProvider()
 
-	// Build summarization system prompt
-	summarizationPrompt := os.Getenv("OPENROUTER_SUMMARIZATION_PROMPT")
+	// Get summarization prompt from config
+	summarizationPrompt := ch.config.AppConfig.LLM.SummarizationPrompt
 	if summarizationPrompt == "" {
 		summarizationPrompt = `You are a conversation summarizer. Your task is to create a concise, comprehensive summary of the conversation that captures:
 1. The main topics discussed
@@ -887,27 +907,27 @@ Format the summary in a clear, structured way that can be used as context for co
 	}
 
 	// Call LLM to generate summary (using ChatForSummarization to avoid default system prompt)
-	log.Printf("[SUMMARIZE] Calling LLM to generate summary with %d messages", len(messagesToSummarize))
+	logger.Log.WithField("message_count", len(messagesToSummarize)).Info("Calling LLM to generate summary")
 	summaryContent, err := provider.ChatForSummarization(messagesToSummarize, summarizationPrompt, req.Model, req.Temperature)
 	if err != nil {
-		log.Printf("[SUMMARIZE] Error from LLM: %v", err)
+		logger.Log.WithError(err).Error("Error from LLM during summarization")
 		ch.sendError(w, http.StatusInternalServerError, "Error generating summary", err)
 		return
 	}
 
-	log.Printf("[SUMMARIZE] Generated summary: %s", summaryContent)
+	logger.Log.WithField("summary_chars", len(summaryContent)).Info("Generated summary")
 
 	// Create new summary in database
 	summary, err := ch.config.DB.CreateSummary(convID, summaryContent, lastMessageID)
 	if err != nil {
-		log.Printf("[SUMMARIZE] Error creating summary: %v", err)
+		logger.Log.WithError(err).Error("Error creating summary")
 		ch.sendError(w, http.StatusInternalServerError, "Error saving summary", err)
 		return
 	}
 
 	// Update conversation to use this new summary
 	if err := ch.config.DB.UpdateConversationActiveSummary(convID, summary.ID); err != nil {
-		log.Printf("[SUMMARIZE] Error updating active summary: %v", err)
+		logger.Log.WithError(err).Error("Error updating active summary")
 		ch.sendError(w, http.StatusInternalServerError, "Error updating conversation", err)
 		return
 	}
@@ -929,12 +949,12 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 
 	username := r.Context().Value(auth.UserContextKey).(string)
 	convID := r.PathValue("id")
-	log.Printf("Get summaries request from user: %s for conversation: %s", username, convID)
+	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get summaries request")
 
 	// Get user from database
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
-		log.Printf("[SUMMARIES] Error getting user: %v", err)
+		logger.Log.WithError(err).Error("Error getting user for summaries request")
 		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
@@ -942,7 +962,7 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 	// Get conversation and verify ownership
 	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
-		log.Printf("[SUMMARIES] Error getting conversation: %v", err)
+		logger.Log.WithError(err).Error("Error getting conversation for summaries request")
 		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
@@ -956,7 +976,7 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 	// Get all summaries for conversation
 	summaries, err := ch.config.DB.GetAllSummaries(convID)
 	if err != nil {
-		log.Printf("[SUMMARIES] Error getting summaries: %v", err)
+		logger.Log.WithError(err).Error("Error getting summaries")
 		ch.sendError(w, http.StatusInternalServerError, "Error retrieving summaries", err)
 		return
 	}

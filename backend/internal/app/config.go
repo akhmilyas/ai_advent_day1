@@ -9,14 +9,19 @@ import (
 type Config struct {
 	// Database interface for data persistence
 	DB db.Database
-	// Model configuration
-	ModelsConfig *config.ModelsConfig
+	// Centralized application configuration
+	AppConfig *config.AppConfig
 }
 
 // NewConfig creates a new application configuration
-func NewConfig(database db.Database, modelsConfig *config.ModelsConfig) *Config {
+func NewConfig(database db.Database, appConfig *config.AppConfig) *Config {
 	return &Config{
-		DB:           database,
-		ModelsConfig: modelsConfig,
+		DB:        database,
+		AppConfig: appConfig,
 	}
+}
+
+// Helper methods for backward compatibility
+func (c *Config) ModelsConfig() *config.ModelsConfig {
+	return c.AppConfig.Models
 }

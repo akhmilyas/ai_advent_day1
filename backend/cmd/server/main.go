@@ -7,9 +7,8 @@ import (
 	"chat-app/internal/context"
 	"chat-app/internal/db"
 	"chat-app/internal/handlers"
-	"log"
+	"chat-app/internal/logger"
 	"net/http"
-	"os"
 )
 
 
@@ -30,47 +29,41 @@ func enableCORS(next http.HandlerFunc) http.HandlerFunc {
 
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// Load centralized configuration
+	logger.Log.Info("Loading application configuration")
+	appConfig, err := config.LoadConfig()
+	if err != nil {
+		logger.Log.WithError(err).Fatal("Failed to load configuration")
 	}
+	logger.Log.WithField("model_count", len(appConfig.Models.GetAvailableModels())).Info("Loaded models")
 
-	// Initialize database
-	log.Printf("Initializing database...")
-	if err := db.InitDB(); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+	// Initialize database with config
+	logger.Log.Info("Initializing database")
+	if err := db.InitDBWithConfig(appConfig.Database); err != nil {
+		logger.Log.WithError(err).Fatal("Failed to initialize database")
 	}
 	defer db.CloseDB()
 
-	// Load models configuration
-	log.Printf("Loading models configuration...")
-	modelsPath := config.GetDefaultModelPath()
-	modelsConfig, err := config.NewModelsConfig(modelsPath)
-	if err != nil {
-		log.Fatalf("Failed to load models configuration: %v", err)
-	}
-	log.Printf("Loaded %d models", len(modelsConfig.GetAvailableModels()))
-
 	// Load War and Peace text
-	log.Printf("Loading War and Peace context...")
+	logger.Log.Info("Loading War and Peace context")
 	warAndPeacePath := "warandpeace.txt"
 	if err := context.LoadWarAndPeace(warAndPeacePath); err != nil {
-		log.Printf("Warning: Failed to load War and Peace text: %v", err)
+		logger.Log.WithError(err).Warn("Failed to load War and Peace text")
 	}
 
 	// Seed demo user
 	if err := db.SeedDemoUser(); err != nil {
-		log.Fatalf("Failed to seed demo user: %v", err)
+		logger.Log.WithError(err).Fatal("Failed to seed demo user")
 	}
 
 	// Create database instance
 	database := db.NewPostgresDB()
 
-	// Initialize application config with database and models
-	appConfig := app.NewConfig(database, modelsConfig)
+	// Initialize application config with database and centralized config
+	appConfiguration := app.NewConfig(database, appConfig)
 
 	// Create chat handlers with dependency injection
-	chatHandler := handlers.NewChatHandlers(appConfig)
+	chatHandler := handlers.NewChatHandlers(appConfiguration)
 
 	// Create new ServeMux to use Go 1.22+ routing features for path parameters
 	mux := http.NewServeMux()
@@ -83,10 +76,13 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	}
 
+	// Create auth handlers with config
+	authHandler := auth.NewAuthHandlers(appConfig)
+
 	// Public routes
-	mux.HandleFunc("POST /api/login", enableCORS(auth.LoginHandler))
+	mux.HandleFunc("POST /api/login", enableCORS(authHandler.LoginHandler))
 	mux.HandleFunc("OPTIONS /api/login", corsHandler)
-	mux.HandleFunc("POST /api/register", enableCORS(auth.RegisterHandler))
+	mux.HandleFunc("POST /api/register", enableCORS(authHandler.RegisterHandler))
 	mux.HandleFunc("OPTIONS /api/register", corsHandler)
 	mux.HandleFunc("GET /api/health", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -97,33 +93,34 @@ func main() {
 	mux.HandleFunc("OPTIONS /api/models", corsHandler)
 
 	// Protected routes - use method-based routing (Go 1.22+ native)
-	mux.HandleFunc("POST /api/chat", enableCORS(auth.AuthMiddleware(chatHandler.ChatHandler)))
+	mux.HandleFunc("POST /api/chat", enableCORS(authHandler.AuthMiddleware(chatHandler.ChatHandler)))
 	mux.HandleFunc("OPTIONS /api/chat", corsHandler)
-	mux.HandleFunc("POST /api/chat/stream", enableCORS(auth.AuthMiddleware(chatHandler.ChatStreamHandler)))
+	mux.HandleFunc("POST /api/chat/stream", enableCORS(authHandler.AuthMiddleware(chatHandler.ChatStreamHandler)))
 	mux.HandleFunc("OPTIONS /api/chat/stream", corsHandler)
-	mux.HandleFunc("GET /api/conversations", enableCORS(auth.AuthMiddleware(chatHandler.GetConversationsHandler)))
+	mux.HandleFunc("GET /api/conversations", enableCORS(authHandler.AuthMiddleware(chatHandler.GetConversationsHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations", corsHandler)
 
 	// Protected parameterized routes (Go 1.22+ native path parameters with {id})
-	mux.HandleFunc("GET /api/conversations/{id}/messages", enableCORS(auth.AuthMiddleware(chatHandler.GetConversationMessagesHandler)))
+	mux.HandleFunc("GET /api/conversations/{id}/messages", enableCORS(authHandler.AuthMiddleware(chatHandler.GetConversationMessagesHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations/{id}/messages", corsHandler)
-	mux.HandleFunc("DELETE /api/conversations/{id}", enableCORS(auth.AuthMiddleware(chatHandler.DeleteConversationHandler)))
+	mux.HandleFunc("DELETE /api/conversations/{id}", enableCORS(authHandler.AuthMiddleware(chatHandler.DeleteConversationHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations/{id}", corsHandler)
-	mux.HandleFunc("POST /api/conversations/{id}/summarize", enableCORS(auth.AuthMiddleware(chatHandler.SummarizeConversationHandler)))
+	mux.HandleFunc("POST /api/conversations/{id}/summarize", enableCORS(authHandler.AuthMiddleware(chatHandler.SummarizeConversationHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations/{id}/summarize", corsHandler)
-	mux.HandleFunc("GET /api/conversations/{id}/summaries", enableCORS(auth.AuthMiddleware(chatHandler.GetConversationSummariesHandler)))
+	mux.HandleFunc("GET /api/conversations/{id}/summaries", enableCORS(authHandler.AuthMiddleware(chatHandler.GetConversationSummariesHandler)))
 	mux.HandleFunc("OPTIONS /api/conversations/{id}/summaries", corsHandler)
 
-	log.Printf("Server starting on port %s", port)
-	log.Printf("Health check: http://localhost:%s/api/health", port)
-	log.Printf("Login endpoint: http://localhost:%s/api/login", port)
-	log.Printf("Register endpoint: http://localhost:%s/api/register", port)
-	log.Printf("Chat endpoint: http://localhost:%s/api/chat", port)
-	log.Printf("Chat stream endpoint: http://localhost:%s/api/chat/stream", port)
-	log.Printf("Conversations endpoint: http://localhost:%s/api/conversations", port)
-	log.Printf("Conversation messages endpoint: http://localhost:%s/api/conversations/{id}/messages", port)
+	port := appConfig.Server.Port
+	logger.Log.WithField("port", port).Info("Server starting")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/health").Info("Health check endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/login").Info("Login endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/register").Info("Register endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/chat").Info("Chat endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/chat/stream").Info("Chat stream endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/conversations").Info("Conversations endpoint")
+	logger.Log.WithField("url", "http://localhost:"+port+"/api/conversations/{id}/messages").Info("Conversation messages endpoint")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+		logger.Log.WithError(err).Fatal("Server failed to start")
 	}
 }

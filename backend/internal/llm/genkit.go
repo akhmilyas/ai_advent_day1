@@ -2,11 +2,12 @@ package llm
 
 import (
 	"bytes"
+	"chat-app/internal/config"
+	"chat-app/internal/logger"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,17 +16,20 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
+	"github.com/sirupsen/logrus"
 )
 
 // GenkitProvider implements LLMProvider using Firebase Genkit with OpenRouter via compat_oai
 type GenkitProvider struct {
 	genkit *genkit.Genkit
+	config *config.LLMConfig
+	models *config.ModelsConfig
 	mu     sync.Mutex
 }
 
 // NewGenkitProvider creates a new Genkit provider instance configured for OpenRouter
-func NewGenkitProvider() (*GenkitProvider, error) {
-	apiKey := GetAPIKey()
+func NewGenkitProvider(llmConfig *config.LLMConfig, modelsConfig *config.ModelsConfig) (*GenkitProvider, error) {
+	apiKey := llmConfig.OpenRouterAPIKey
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
@@ -33,7 +37,7 @@ func NewGenkitProvider() (*GenkitProvider, error) {
 	ctx := context.Background()
 
 	// Get default model from config
-	defaultModel := GetModel()
+	defaultModel := modelsConfig.GetDefaultModel()
 
 	// Initialize Genkit with OpenRouter plugin
 	g := genkit.Init(ctx,
@@ -45,18 +49,59 @@ func NewGenkitProvider() (*GenkitProvider, error) {
 		genkit.WithDefaultModel("openrouter/"+defaultModel),
 	)
 
-	log.Printf("[Genkit] Initialized with OpenRouter provider, default model: %s", defaultModel)
+	logger.Log.WithField("default_model", defaultModel).Info("Initialized Genkit with OpenRouter provider")
 
 	return &GenkitProvider{
 		genkit: g,
+		config: llmConfig,
+		models: modelsConfig,
+		mu:     sync.Mutex{},
 	}, nil
+}
+
+// Helper methods
+func (p *GenkitProvider) getModel() string {
+	return p.models.GetDefaultModel()
+}
+
+func (p *GenkitProvider) getAPIKey() string {
+	return p.config.OpenRouterAPIKey
+}
+
+func (p *GenkitProvider) getSystemPrompt() string {
+	return p.config.DefaultSystemPrompt
+}
+
+func (p *GenkitProvider) getTopP(format string) *float64 {
+	if format == "json" || format == "xml" {
+		return &p.config.StructuredTopP
+	}
+	return &p.config.TextTopP
+}
+
+func (p *GenkitProvider) getTopK(format string) *int {
+	if format == "json" || format == "xml" {
+		return &p.config.StructuredTopK
+	}
+	return &p.config.TextTopK
+}
+
+func (p *GenkitProvider) buildMessagesWithHistory(messages []Message, customPrompt string) []Message {
+	systemPrompt := p.getSystemPrompt()
+
+	if customPrompt != "" {
+		systemPrompt = systemPrompt + "\n\n" + customPrompt
+	}
+
+	logger.Log.WithField("prompt_length", len(systemPrompt)).Debug("Using system prompt")
+	return append([]Message{{Role: "system", Content: systemPrompt}}, messages...)
 }
 
 // ChatWithHistory sends a chat request with conversation history and returns the full response
 func (p *GenkitProvider) ChatWithHistory(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (string, error) {
 	model := modelOverride
 	if model == "" {
-		model = GetModel()
+		model = p.getModel()
 	}
 
 	// Ensure model has openrouter/ prefix
@@ -68,9 +113,14 @@ func (p *GenkitProvider) ChatWithHistory(messages []Message, customSystemPrompt 
 	if temperature != nil {
 		tempStr = fmt.Sprintf("%.2f", *temperature)
 	}
-	log.Printf("[Genkit] Calling with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
+	logger.Log.WithFields(logrus.Fields{
+		"model": model,
+		"format": format,
+		"temperature": tempStr,
+		"message_count": len(messages),
+	}).Info("Calling Genkit")
 
-	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
+	messagesWithHistory := p.buildMessagesWithHistory(messages, customSystemPrompt)
 
 	// Convert messages to Genkit format
 	var genkitMessages []*ai.Message
@@ -91,7 +141,7 @@ func (p *GenkitProvider) ChatWithHistory(messages []Message, customSystemPrompt 
 	}
 
 	// Set top_p based on format
-	topP := GetTopP(format)
+	topP := p.getTopP(format)
 	if topP != nil {
 		config.TopP = openai.Float(*topP)
 	}
@@ -117,7 +167,7 @@ func (p *GenkitProvider) ChatWithHistory(messages []Message, customSystemPrompt 
 func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemPrompt string, format string, modelOverride string, temperature *float64) (<-chan StreamChunk, error) {
 	model := modelOverride
 	if model == "" {
-		model = GetModel()
+		model = p.getModel()
 	}
 
 	// Ensure model has openrouter/ prefix
@@ -129,9 +179,14 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 	if temperature != nil {
 		tempStr = fmt.Sprintf("%.2f", *temperature)
 	}
-	log.Printf("[Genkit] Calling (streaming) with model: %s, format: %s, temperature: %s, message history count: %d", model, format, tempStr, len(messages))
+	logger.Log.WithFields(logrus.Fields{
+		"model": model,
+		"format": format,
+		"temperature": tempStr,
+		"message_count": len(messages),
+	}).Info("Calling Genkit (streaming)")
 
-	messagesWithHistory := buildMessagesWithHistory(messages, customSystemPrompt)
+	messagesWithHistory := p.buildMessagesWithHistory(messages, customSystemPrompt)
 
 	// Convert messages to Genkit format
 	var genkitMessages []*ai.Message
@@ -152,7 +207,7 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 	}
 
 	// Set top_p based on format
-	topP := GetTopP(format)
+	topP := p.getTopP(format)
 	if topP != nil {
 		config.TopP = openai.Float(*topP)
 	}
@@ -181,7 +236,7 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 						text := part.Text
 						fullResponse.WriteString(text)
 						chunks <- StreamChunk{Content: text}
-						log.Printf("[Genkit] Stream chunk: %q", text)
+						logger.Log.WithField("chunk_length", len(text)).Debug("Stream chunk received")
 					}
 				}
 				return nil
@@ -189,7 +244,7 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 		)
 
 		if err != nil {
-			log.Printf("[Genkit] Stream error: %v", err)
+			logger.Log.WithError(err).Error("Stream error")
 			return
 		}
 
@@ -201,8 +256,11 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 				CompletionTokens: int(resp.Usage.OutputTokens),
 				TotalTokens:      int(resp.Usage.TotalTokens),
 			}
-			log.Printf("[Genkit] Usage - Prompt: %d, Completion: %d, Total: %d",
-				usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+			logger.Log.WithFields(logrus.Fields{
+				"prompt_tokens":     usage.PromptTokens,
+				"completion_tokens": usage.CompletionTokens,
+				"total_tokens":      usage.TotalTokens,
+			}).Debug("Captured usage data")
 		}
 
 		// Send final metadata chunk with usage data
@@ -215,7 +273,7 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 			IsDone: true,
 		}
 
-		log.Printf("[Genkit] Stream completed, full response length: %d", len(fullResponse.String()))
+		logger.Log.WithField("response_length", len(fullResponse.String())).Debug("Stream completed")
 	}()
 
 	return chunks, nil
@@ -226,13 +284,13 @@ func (p *GenkitProvider) ChatWithHistoryStream(messages []Message, customSystemP
 func (p *GenkitProvider) FetchGenerationCost(generationID string) (*GenerationData, error) {
 	// Genkit via compat_oai doesn't expose OpenRouter's generation endpoint
 	// We could potentially track this via OpenTelemetry traces if needed
-	log.Printf("[Genkit] FetchGenerationCost not supported for Genkit provider")
+	logger.Log.Warn("FetchGenerationCost not supported for Genkit provider")
 	return nil, fmt.Errorf("generation cost tracking not supported for Genkit provider")
 }
 
 // GetDefaultModel returns the default model for Genkit provider
 func (p *GenkitProvider) GetDefaultModel() string {
-	return GetModel()
+	return p.getModel()
 }
 
 // FetchGenerationCostViaOpenRouter attempts to fetch generation cost using direct OpenRouter API
@@ -242,13 +300,13 @@ func (p *GenkitProvider) FetchGenerationCostViaOpenRouter(generationID string) (
 		return nil, fmt.Errorf("generation ID is empty")
 	}
 
-	apiKey := GetAPIKey()
+	apiKey := p.getAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 
 	url := fmt.Sprintf("%s?id=%s", openRouterGenerationURL, generationID)
-	log.Printf("[Genkit] Fetching generation cost from OpenRouter API: %s", url)
+	logger.Log.WithField("url", url).Debug("Fetching generation cost from OpenRouter API")
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
