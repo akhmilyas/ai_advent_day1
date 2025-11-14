@@ -2,7 +2,7 @@ package app
 
 import (
 	"chat-app/internal/config"
-	"chat-app/internal/db"
+	"chat-app/internal/repository/db"
 )
 
 // Config holds all application dependencies and configuration

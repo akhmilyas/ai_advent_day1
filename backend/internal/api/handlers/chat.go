@@ -2,13 +2,12 @@ package handlers
 
 import (
 	"chat-app/internal/app"
-	"chat-app/internal/auth"
 	"chat-app/internal/config"
 	"chat-app/internal/context"
-	"chat-app/internal/db"
-	"chat-app/internal/llm"
 	"chat-app/internal/logger"
-	"chat-app/internal/validation"
+	"chat-app/internal/repository/db"
+	"chat-app/internal/service/llm"
+	"chat-app/pkg/validation"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -104,12 +103,6 @@ type SummariesResponse struct {
 	Summaries []SummaryData `json:"summaries"`
 }
 
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
 type ChatHandlers struct{
 	config    *app.Config
 	validator *validation.ChatRequestValidator
@@ -149,7 +142,7 @@ func (ch *ChatHandlers) sendError(w http.ResponseWriter, status int, message str
 
 // getUserFromContext extracts and validates user from request context
 func (ch *ChatHandlers) getUserFromContext(r *http.Request) (*db.User, error) {
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	return ch.config.DB.GetUserByUsername(username)
 }
 
@@ -292,7 +285,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	logger.Log.WithFields(logrus.Fields{
 		"username": username,
 	}).Info("Chat request received")
@@ -402,7 +395,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	logger.Log.WithField("username", username).Info("Chat stream request received")
 
 	var req ChatRequest
@@ -618,7 +611,7 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	logger.Log.WithField("username", username).Info("Get conversations request")
 
 	// Get user from database
@@ -665,7 +658,7 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 
 // GetConversationMessagesHandler returns all messages from a specific conversation
 func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	convID := r.PathValue("id")
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get conversation messages request")
 
@@ -726,7 +719,7 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 
 // DeleteConversationHandler deletes a specific conversation
 func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	convID := r.PathValue("id")
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Delete conversation request")
 
@@ -845,7 +838,7 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	convID := r.PathValue("id")
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Summarize conversation request")
 
@@ -980,7 +973,7 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 		return
 	}
 
-	username := r.Context().Value(auth.UserContextKey).(string)
+	username := r.Context().Value(UserContextKey).(string)
 	convID := r.PathValue("id")
 	logger.Log.WithFields(logrus.Fields{"username": username, "conversation_id": convID}).Info("Get summaries request")
 

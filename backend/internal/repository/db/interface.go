@@ -1,7 +1,7 @@
 package db
 
 import (
-	"chat-app/internal/llm"
+	"chat-app/internal/service/llm"
 )
 
 // Database defines the interface for all database operations

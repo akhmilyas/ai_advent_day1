@@ -1,13 +1,12 @@
 package main
 
 import (
+	"chat-app/internal/api/handlers"
 	"chat-app/internal/app"
-	"chat-app/internal/auth"
 	"chat-app/internal/config"
 	"chat-app/internal/context"
-	"chat-app/internal/db"
-	"chat-app/internal/handlers"
 	"chat-app/internal/logger"
+	"chat-app/internal/repository/postgres"
 	"net/http"
 )
 
@@ -39,7 +38,7 @@ func main() {
 
 	// Initialize database with config
 	logger.Log.Info("Initializing database")
-	database, err := db.NewPostgresDB(appConfig.Database)
+	database, err := postgres.NewPostgresDB(appConfig.Database)
 	if err != nil {
 		logger.Log.WithError(err).Fatal("Failed to initialize database")
 	}
@@ -53,7 +52,7 @@ func main() {
 	}
 
 	// Seed demo user
-	if err := db.SeedDemoUser(database); err != nil {
+	if err := postgres.SeedDemoUser(database); err != nil {
 		logger.Log.WithError(err).Fatal("Failed to seed demo user")
 	}
 
@@ -75,7 +74,7 @@ func main() {
 	}
 
 	// Create auth handlers with config and database
-	authHandler := auth.NewAuthHandlers(appConfig, database)
+	authHandler := handlers.NewAuthHandlers(appConfig, database)
 
 	// Public routes
 	mux.HandleFunc("POST /api/login", enableCORS(authHandler.LoginHandler))

@@ -1,15 +1,19 @@
-package db
+package postgres
 
 import (
 	"chat-app/internal/config"
 	"chat-app/internal/logger"
+	"chat-app/internal/repository/db"
 	"database/sql"
 	"fmt"
 
 	_ "github.com/lib/pq"
 )
 
-// PostgresDB implements the Database interface
+// Ensure PostgresDB implements db.Database interface
+var _ db.Database = (*PostgresDB)(nil)
+
+// PostgresDB implements the db.Database interface
 type PostgresDB struct {
 	conn *sql.DB
 }

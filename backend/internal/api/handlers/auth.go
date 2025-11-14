@@ -1,10 +1,11 @@
-package auth
+package handlers
 
 import (
 	"chat-app/internal/config"
-	"chat-app/internal/db"
 	"chat-app/internal/logger"
-	"chat-app/internal/validation"
+	"chat-app/internal/repository/db"
+	"chat-app/internal/repository/postgres"
+	"chat-app/pkg/validation"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -151,7 +152,7 @@ func (h *AuthHandlers) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify password
-	if !user.VerifyPassword(req.Password) {
+	if !postgres.VerifyPassword(user, req.Password) {
 		logger.Log.WithFields(logrus.Fields{
 			"username": req.Username,
 		}).Warn("Login failed: invalid password")
