@@ -1,13 +1,22 @@
 # AI Chat Application
 
-A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter LLM API integration.
+A fullstack chat application with Go backend, React frontend, PostgreSQL database, and OpenRouter LLM integration.
 
-**Features**: User auth (JWT), conversation history, SSE streaming, dark/light theme, markdown rendering, customizable system prompts, **model selection**, **temperature control**, **structured response formats (JSON/XML)** with visual rendering, **conversation summarization** with progressive re-summarization
+## Features
+
+- 🤖 **Multi-Model Support** - 10+ LLM models (Meta, Google, OpenAI, Anthropic, etc.)
+- 🎛️ **Temperature Control** - Adjustable creativity (0.0-2.0)
+- 📊 **Structured Formats** - JSON/XML with schema validation and tree rendering
+- 📝 **Smart Summarization** - Progressive re-summarization for long conversations
+- ⚡ **Real-time Streaming** - Server-Sent Events (SSE)
+- 🎨 **Dark/Light Theme** - Persistent theme preference
+- 🔐 **JWT Authentication** - Secure user auth with bcrypt
 
 ## Quick Start
 
 ### Prerequisites
-- Docker & Docker Compose (recommended), or Go 1.25.3+, Node.js 20+, PostgreSQL 13+
+- Docker & Docker Compose (recommended)
+- Or: Go 1.25.3+, Node.js 20+, PostgreSQL 13+
 - OpenRouter API key from [openrouter.ai](https://openrouter.ai/)
 
 ### Setup
@@ -15,15 +24,22 @@ A fullstack chat app with Go backend, React frontend, PostgreSQL, and OpenRouter
 # Copy environment file
 cp .env.example .env
 
-# Edit .env with your OpenRouter API key
+# Edit .env with your configuration
+# Required:
 OPENROUTER_API_KEY=your_key_here
+JWT_SECRET=your-secure-32-char-minimum-secret
+
+# Generate a secure JWT secret (32+ characters)
+# openssl rand -base64 32
 
 # Build and run
 docker compose build
 docker compose up
 ```
 
-Access at `http://localhost:3000` (frontend) and `http://localhost:8080` (backend)
+Access at:
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8080
 
 **Demo credentials**: `demo` / `demo123`
 
@@ -35,73 +51,30 @@ Frontend (React, Port 3000)
 Backend (Go, Port 8080)
     ↓ SQL
 PostgreSQL (Port 5432)
-    ↑ HTTPS API
-OpenRouter LLM (External)
+    ↑ HTTPS
+OpenRouter LLM API
 ```
-
-### Key Components
-
-**Backend**: Auth (JWT), Chat handlers (REST + SSE), LLM service, Database layer
-**Frontend**: Login/Register, Chat UI, Auth service, Chat service, Theme system
-**Database**: users, conversations, messages tables
 
 ## API Endpoints
 
 ### Public
-- `POST /api/login` → `{username, password}` → `{token}`
-- `POST /api/register` → `{username, email, password}` → `{token}`
-- `GET /api/health` → OK
+- `POST /api/login` - Authenticate user
+- `POST /api/register` - Create account
+- `GET /api/health` - Health check
 
 ### Protected (require `Authorization: Bearer <token>`)
-- `GET /api/models` → `{models: [{id, name, provider, tier}, ...]}`
-- `POST /api/chat` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}` → `{response, conversation_id, model}`
-- `POST /api/chat/stream` → `{message, conversation_id?, system_prompt?, response_format?, response_schema?, model?, temperature?}` → SSE stream
-- `GET /api/conversations` → `{conversations: [{id, title, response_format, response_schema, ...}, ...]}`
-- `GET /api/conversations/{id}/messages` → `{messages: [{role, content, model, temperature, ...}, ...]}`
-- `DELETE /api/conversations/{id}` → `{success: boolean}`
-- `POST /api/conversations/{id}/summarize` → `{model?, temperature?}` → `{summary, summarized_up_to_message_id, conversation_id}`
-- `GET /api/conversations/{id}/summaries` → `{summaries: [{id, summary_content, summarized_up_to_message_id, usage_count, created_at}, ...]}`
-
-**CORS**: All endpoints support Cross-Origin requests from any origin (frontend can call backend from browser)
-
-**Response Formats**:
-- `text` (default): Plain text with markdown rendering
-- `json`: Structured JSON with schema validation, rendered as hierarchical tree
-- `xml`: Structured XML with schema validation, rendered as hierarchical tree
-
-**Note**: Response format is locked after the first message in a conversation and stored in the database
-
-## Build & Run
-
-### With Docker Compose
-```bash
-docker compose build
-docker compose up
-```
-
-### Manual Build
-
-**Backend**:
-```bash
-cd backend
-go mod download
-go build -o server ./cmd/server
-./server
-```
-
-**Frontend**:
-```bash
-cd frontend
-npm install
-npm run build
-# or for dev: npm start
-```
+- `GET /api/models` - List available models
+- `POST /api/chat/stream` - Send message (SSE streaming)
+- `POST /api/chat` - Send message (blocking)
+- `GET /api/conversations` - List conversations
+- `GET /api/conversations/{id}/messages` - Get messages
+- `DELETE /api/conversations/{id}` - Delete conversation
+- `POST /api/conversations/{id}/summarize` - Create/update summary
+- `GET /api/conversations/{id}/summaries` - List summaries
 
 ## Configuration
 
-### Environment Variables
-
-Set environment variables in `.env`:
+### Environment Variables (.env)
 
 ```bash
 # Required
@@ -110,17 +83,13 @@ OPENROUTER_API_KEY=your_api_key
 # Optional LLM
 OPENROUTER_SYSTEM_PROMPT=You are a helpful assistant.
 
-# LLM Parameters - Format-Aware Configuration
-# Note: Temperature is now user-controlled via Settings UI (0.0-2.0 slider)
-# Parameters for plain text conversations
-OPENROUTER_TEXT_TOP_P=0.9
+# LLM Parameters (Temperature is user-controlled via UI)
+OPENROUTER_TEXT_TOP_P=0.9          # Text conversations
 OPENROUTER_TEXT_TOP_K=40
-
-# Parameters for structured formats: JSON/XML (more deterministic)
-OPENROUTER_STRUCTURED_TOP_P=0.8
+OPENROUTER_STRUCTURED_TOP_P=0.8    # JSON/XML (more deterministic)
 OPENROUTER_STRUCTURED_TOP_K=20
 
-# Optional Database (Docker defaults shown)
+# Database (Docker defaults)
 DB_HOST=postgres
 DB_PORT=5432
 DB_USER=postgres
@@ -131,7 +100,7 @@ DB_SSLMODE=disable
 
 ### Model Configuration
 
-Available models are configured in `backend/config/models.json`:
+Edit `backend/config/models.json` to add/remove models:
 
 ```json
 [
@@ -140,156 +109,174 @@ Available models are configured in `backend/config/models.json`:
     "name": "Llama 3.3 8B Instruct (Free)",
     "provider": "Meta",
     "tier": "free"
-  },
-  {
-    "id": "google/gemini-2.5-flash",
-    "name": "Gemini 2.5 Flash",
-    "provider": "Google",
-    "tier": "paid"
-  },
-  {
-    "id": "openai/gpt-5-mini",
-    "name": "GPT-5 Mini",
-    "provider": "OpenAI",
-    "tier": "paid"
-  },
-  {
-    "id": "z-ai/glm-4.5-air:free",
-    "name": "GLM 4.5 Air (Free)",
-    "provider": "Z-AI",
-    "tier": "free"
-  },
-  {
-    "id": "alibaba/tongyi-deepresearch-30b-a3b:free",
-    "name": "Tongyi DeepResearch 30B (Free)",
-    "provider": "Alibaba",
-    "tier": "free"
-  },
-  {
-    "id": "openrouter/polaris-alpha",
-    "name": "Polaris Alpha",
-    "provider": "OpenRouter",
-    "tier": "paid"
   }
 ]
 ```
 
-**Note**: The first model in the configuration file is used as the default. Users can select a different model from the Settings UI.
+First model is the default. Currently configured:
+- Llama 3.3 8B (Meta, free) - **DEFAULT**
+- Mistral 7B (Mistral, free)
+- GLM 4.5 Air (Z-AI, free)
+- Polaris Alpha (OpenRouter, free)
+- Gemini 2.5 Flash (Google, paid)
+- Claude Sonnet 4.5 (Anthropic, paid)
+- And 4 more...
 
 ## Usage
 
-1. **Register/Login**: Create account or use `demo/demo123`
-2. **Start New Chat**: Click sidebar or start typing
-3. **Configure Settings** (⚙️):
-   - **Select Model**: Choose from available models (Llama 3.3, Gemini 2.5 Flash, GPT-5 Mini, GLM 4.5 Air, Tongyi DeepResearch, Polaris Alpha)
-   - **Temperature**: Adjust creativity (0.0-2.0 slider, default 0.7)
-     - 0.0-0.5: Focused and deterministic
-     - 0.5-1.0: Balanced
-     - 1.0-2.0: Creative and random
-   - **Response Format** (before first message):
-     - **Plain Text**: Natural conversation with markdown rendering
-     - **JSON**: Structured data with schema, displayed as hierarchical tree with raw view
-     - **XML**: Structured markup with schema, displayed as hierarchical tree with raw view
-   - **System Prompt** (text mode only): Customize AI behavior
-   - **Schema** (JSON/XML only): Define structure before first message
-4. **Chat**: Type message → AI streams response in real-time
-5. **Summarize** (📝): Click to create conversation summary
-   - First summary: Summarizes entire conversation history
-   - After 2+ uses: Creates new summary by re-summarizing (old summary + new messages)
-   - Summaries shown in collapsible sections in chat history
-   - Future messages use summary as context instead of full history
-6. **Theme**: Toggle 🌙/☀️ button for dark/light mode
-7. **Conversations**: Auto-saved with format locked after first message
-8. **Model & Temperature Display**: Each AI response shows which model and temperature were used
-9. **Logout**: Click logout button (all data persisted)
+1. **Login/Register** - Use demo credentials or create account
+2. **Configure Settings** (⚙️):
+   - Select model from dropdown
+   - Adjust temperature (0.0-2.0 slider)
+   - Choose response format (Text/JSON/XML)
+   - Add schema (for JSON/XML)
+   - Set custom system prompt (for Text)
+3. **Chat** - Type message, AI streams response
+4. **Summarize** (📝) - Click to create conversation summary
+5. **Theme** - Toggle 🌙/☀️ for dark/light mode
+
+### Response Formats
+
+**Text** (default): Markdown rendering, custom prompts
+
+**JSON**: Structured data with schema
+```json
+{
+  "type": "object",
+  "properties": {
+    "answer": {"type": "string"}
+  }
+}
+```
+
+**XML**: Structured markup with schema
+```xml
+<xsd:schema>
+  <xsd:element name="response" type="xsd:string"/>
+</xsd:schema>
+```
+
+**Note**: Format locks after first message and cannot be changed.
 
 ## Tech Stack
 
-**Backend**: Go 1.25.3, PostgreSQL 13 (with conversation_summaries table), jwt-go, bcrypt, google/uuid
+**Backend**: Go 1.25.3, PostgreSQL 15, JWT, UUID, Bcrypt
 **Frontend**: React 18, TypeScript, react-markdown, remark-gfm
-**Deployment**: Docker, Docker Compose
+**Deployment**: Docker, Docker Compose, nginx
+**LLM**: OpenRouter API (10+ models)
 
-**IDs**: All database IDs use UUID (Universally Unique Identifiers) for better distributed system support and collision resistance
+## Database Schema
 
-**Database Tables**: users, conversations (with active_summary_id), messages (with model/temperature), conversation_summaries (with usage_count tracking)
-
-## Features
-
-- **Auth**: JWT tokens (24hr), bcrypt password hashing, user registration
-- **Chat**: SSE streaming, optimistic UI updates, full conversation history
-- **Model Selection**:
-  - Choose from multiple LLM models (configured via `backend/config/models.json`)
-  - Current models: Llama 3.3 8B (free), Gemini 2.5 Flash, GPT-5 Mini, GLM 4.5 Air, Tongyi DeepResearch, Polaris Alpha
-  - Default model auto-selected from configuration
-  - Model preference saved to localStorage
-  - Per-message model tracking in database
-  - Model name displayed with each AI response
-- **Temperature Control**:
-  - User-adjustable temperature slider (0.0-2.0, step 0.01)
-  - Default: 0.7 (balanced)
-  - Per-request temperature sent to OpenRouter API
-  - Temperature saved with each message in database
-  - Temperature displayed with each AI response
-  - Preference persisted in localStorage
-- **Response Formats**:
-  - **Text**: Markdown rendering with tables, lists, code blocks
-  - **JSON**: Schema-based structured output, rendered as hierarchical tree supporting nested objects/arrays with raw view toggle
-  - **XML**: Schema-based structured output, rendered as hierarchical tree with syntax highlighting and raw view toggle
-- **Format-Aware LLM Parameters**: Different top-p/top-k for text vs structured formats
-- **OpenRouter Provider Routing**: `require_parameters: true` ensures all parameters are supported by selected provider
-- **System Prompts**: Custom prompts for text conversations (stored in localStorage)
-- **Schema Validation**: Define JSON/XML schemas for structured responses
-- **Visual Rendering**: Hierarchical tree structures for both JSON and XML with unlimited nesting support
-- **Format Locking**: Response format cannot be changed after conversation starts
-- **Conversation Summarization**:
-  - **Manual trigger**: Click 📝 button to summarize conversation
-  - **Progressive re-summarization**: After summary is used 2+ times, creates new summary from (old summary + new messages)
-  - **Context replacement**: Summary replaces full message history in LLM context
-  - **Visual indicators**: Collapsible `<details>` sections show summary content in chat
-  - **Multi-summary support**: Tracks multiple summaries per conversation over time
-  - **Persistence**: All summaries stored in database with usage count tracking
-- **Database**: PostgreSQL persistence with format/schema/temperature/summaries stored per conversation/message
-- **Security**: JWT validation, CORS, API key management
+```sql
+users (id UUID, username, email, password_hash, created_at)
+  ↓
+conversations (id UUID, user_id, title, response_format, response_schema,
+               active_summary_id, created_at, updated_at)
+  ↓
+messages (id UUID, conversation_id, role, content, model, temperature,
+          prompt_tokens, completion_tokens, total_tokens, total_cost,
+          latency, generation_time, provider, created_at)
+  ↓
+conversation_summaries (id UUID, conversation_id, summary_content,
+                        summarized_up_to_message_id, usage_count, created_at)
+```
 
 ## Project Structure
 
 ```
 backend/
-  cmd/server/main.go           # Entry point, routing
-  config/models.json           # Available LLM models configuration
-  internal/auth/               # JWT, login, register
-  internal/config/             # Models configuration loader
-  internal/db/                 # PostgreSQL layer (users, conversations, messages)
-  internal/handlers/           # HTTP handlers (chat, conversations, models)
-  internal/llm/                # OpenRouter integration, format-aware params
+  cmd/server/main.go              # Entry point, routing
+  config/models.json              # Model configuration
+  internal/
+    auth/auth.go                  # JWT authentication
+    config/models.go              # Config loader
+    db/                           # Database layer
+    handlers/chat.go              # HTTP handlers
+    llm/                          # OpenRouter integration
+
 frontend/
-  src/components/
-    Chat.tsx                   # Main chat UI, model selection
-    Message.tsx                # Message rendering (text/JSON/XML)
-    SettingsModal.tsx          # Format/schema/prompt/model configuration
-    Sidebar.tsx                # Conversation list
-  src/services/
-    auth.ts                    # JWT token management
-    chat.ts                    # API calls, SSE parsing, model fetching
-  src/contexts/
-    ThemeContext.tsx           # Dark/light theme
-  src/themes.ts                # Color palettes
-docker-compose.yml             # Service orchestration
-.env.example                   # Configuration template
+  src/
+    components/
+      Chat.tsx                    # Main UI
+      Message.tsx                 # Format rendering
+      SettingsModal.tsx           # Configuration
+      Sidebar.tsx                 # Conversations
+    services/
+      auth.ts                     # JWT management
+      chat.ts                     # API calls
+    contexts/ThemeContext.tsx     # Theme state
+
+docker-compose.yml                # Orchestration
+.env.example                      # Config template
+CLAUDE.md                         # Developer docs
+```
+
+## Manual Build
+
+**Backend**:
+```bash
+cd backend
+go mod download
+go build -o server ./cmd/server
+./server  # Requires PostgreSQL on localhost:5432
+```
+
+**Frontend**:
+```bash
+cd frontend
+npm install
+npm run build    # Production
+npm start        # Development
 ```
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| OPENROUTER_API_KEY not set | Add to `.env` |
-| Port already in use | Change in `docker-compose.yml` |
-| Database connection error | Check DB_HOST, DB_PORT, credentials in `.env` |
-| Login fails | Use demo/demo123 or register new account |
-| Stream stops | Check network connection, browser console for errors |
-| Settings/theme/prompt not saving | Enable localStorage in browser |
-| CORS errors | Verify backend is running and accessible |
+| OPENROUTER_API_KEY not set | Add to `.env` and restart |
+| Port already in use | Change ports in `docker-compose.yml` |
+| Database connection error | Check `DB_*` vars in `.env` |
+| Login fails | Use `demo`/`demo123` or register |
+| Stream stops | Check network, browser console |
+| Settings not saving | Enable localStorage in browser |
+| CORS errors | Verify backend at http://localhost:8080/api/health |
+| Format locked | Start new conversation to change format |
+
+**Debug**:
+```bash
+# Backend logs
+docker compose logs backend -f
+
+# Database access
+docker exec -it <container> psql -U postgres -d chatapp
+```
+
+## Development
+
+### Add API Endpoint
+1. Add handler to `backend/internal/handlers/chat.go`
+2. Register route in `backend/cmd/server/main.go`
+3. Add method to `frontend/src/services/chat.ts`
+4. Use in component
+
+### Add Model
+1. Edit `backend/config/models.json`
+2. Restart backend
+3. Model appears in Settings dropdown
+
+### Testing
+```bash
+# Frontend
+cd frontend && npm test
+
+# Backend
+cd backend && go test ./...
+```
 
 ## License
 
 MIT
+
+---
+
+**For detailed documentation, see [CLAUDE.md](CLAUDE.md)**

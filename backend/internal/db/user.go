@@ -19,8 +19,8 @@ type User struct {
 }
 
 // CreateUser creates a new user with hashed password
-func CreateUser(username, email, password string) (*User, error) {
-	db := GetDB()
+func (p *PostgresDB) CreateUser(username, email, password string) (*User, error) {
+	db := p.db
 
 	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -56,8 +56,8 @@ func CreateUser(username, email, password string) (*User, error) {
 }
 
 // GetUserByUsername retrieves a user by username
-func GetUserByUsername(username string) (*User, error) {
-	db := GetDB()
+func (p *PostgresDB) GetUserByUsername(username string) (*User, error) {
+	db := p.db
 
 	var user User
 	query := `SELECT id, username, email, password_hash, created_at FROM users WHERE username = $1`
@@ -81,19 +81,33 @@ func (u *User) VerifyPassword(password string) bool {
 
 // SeedDemoUser creates the demo user if it doesn't exist
 func SeedDemoUser() error {
+	db := NewPostgresDB()
 	// Check if demo user already exists
-	_, err := GetUserByUsername("demo")
+	_, err := db.GetUserByUsername("demo")
 	if err == nil {
 		log.Printf("[DB] Demo user already exists, skipping seed")
 		return nil
 	}
 
 	// Create demo user
-	_, err = CreateUser("demo", "demo@example.com", "demo123")
+	_, err = db.CreateUser("demo", "demo@example.com", "demo123")
 	if err != nil && err.Error() != "username already exists" {
 		return fmt.Errorf("error seeding demo user: %w", err)
 	}
 
 	log.Printf("[DB] Demo user seeded successfully")
 	return nil
+}
+
+// Standalone function wrappers for backwards compatibility
+// These can be removed once all code is migrated to use the Database interface
+
+func CreateUser(username, email, password string) (*User, error) {
+	db := NewPostgresDB()
+	return db.CreateUser(username, email, password)
+}
+
+func GetUserByUsername(username string) (*User, error) {
+	db := NewPostgresDB()
+	return db.GetUserByUsername(username)
 }

@@ -15,6 +15,16 @@ var (
 	once     sync.Once
 )
 
+// PostgresDB implements the Database interface
+type PostgresDB struct {
+	db *sql.DB
+}
+
+// NewPostgresDB creates a new PostgresDB instance from the existing connection
+func NewPostgresDB() *PostgresDB {
+	return &PostgresDB{db: instance}
+}
+
 // GetDB returns the singleton database connection
 func GetDB() *sql.DB {
 	return instance

@@ -51,8 +51,8 @@ type Message struct {
 }
 
 // CreateConversation creates a new conversation for a user
-func CreateConversation(userID string, title string, responseFormat string, responseSchema string) (*Conversation, error) {
-	db := GetDB()
+func (p *PostgresDB) CreateConversation(userID string, title string, responseFormat string, responseSchema string) (*Conversation, error) {
+	db := p.db
 
 	convID := uuid.New().String()
 	var createdAt, updatedAt time.Time
@@ -87,8 +87,8 @@ func CreateConversation(userID string, title string, responseFormat string, resp
 }
 
 // GetConversationsByUser retrieves all conversations for a user
-func GetConversationsByUser(userID string) ([]Conversation, error) {
-	db := GetDB()
+func (p *PostgresDB) GetConversationsByUser(userID string) ([]Conversation, error) {
+	db := p.db
 
 	query := `
 	SELECT id, user_id, title, COALESCE(response_format, 'text'), COALESCE(response_schema, ''), created_at, updated_at
@@ -116,8 +116,8 @@ func GetConversationsByUser(userID string) ([]Conversation, error) {
 }
 
 // GetConversation retrieves a specific conversation
-func GetConversation(convID string) (*Conversation, error) {
-	db := GetDB()
+func (p *PostgresDB) GetConversation(convID string) (*Conversation, error) {
+	db := p.db
 
 	var conv Conversation
 	query := `
@@ -135,8 +135,8 @@ func GetConversation(convID string) (*Conversation, error) {
 }
 
 // AddMessage adds a message to a conversation
-func AddMessage(conversationID string, role, content, model string, temperature *float64, provider string, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
-	db := GetDB()
+func (p *PostgresDB) AddMessage(conversationID string, role, content, model string, temperature *float64, provider string, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
+	db := p.db
 
 	msgID := uuid.New().String()
 	var createdAt time.Time
@@ -204,8 +204,8 @@ func AddMessage(conversationID string, role, content, model string, temperature 
 }
 
 // GetConversationMessages retrieves all messages from a conversation in LLM format
-func GetConversationMessages(conversationID string) ([]llm.Message, error) {
-	db := GetDB()
+func (p *PostgresDB) GetConversationMessages(conversationID string) ([]llm.Message, error) {
+	db := p.db
 
 	query := `
 	SELECT role, content
@@ -236,8 +236,8 @@ func GetConversationMessages(conversationID string) ([]llm.Message, error) {
 }
 
 // GetConversationMessagesWithDetails retrieves all messages with full details for frontend display
-func GetConversationMessagesWithDetails(conversationID string) ([]Message, error) {
-	db := GetDB()
+func (p *PostgresDB) GetConversationMessagesWithDetails(conversationID string) ([]Message, error) {
+	db := p.db
 
 	query := `
 	SELECT id, conversation_id, role, content, COALESCE(model, ''), temperature, COALESCE(provider, ''),
@@ -267,8 +267,8 @@ func GetConversationMessagesWithDetails(conversationID string) ([]Message, error
 }
 
 // DeleteConversation deletes a conversation and all its messages
-func DeleteConversation(convID string) error {
-	db := GetDB()
+func (p *PostgresDB) DeleteConversation(convID string) error {
+	db := p.db
 
 	query := `DELETE FROM conversations WHERE id = $1`
 	_, err := db.Exec(query, convID)
@@ -281,8 +281,8 @@ func DeleteConversation(convID string) error {
 }
 
 // CreateSummary creates a new conversation summary
-func CreateSummary(conversationID string, summaryContent string, summarizedUpToMessageID *string) (*ConversationSummary, error) {
-	db := GetDB()
+func (p *PostgresDB) CreateSummary(conversationID string, summaryContent string, summarizedUpToMessageID *string) (*ConversationSummary, error) {
+	db := p.db
 
 	summaryID := uuid.New().String()
 	var createdAt time.Time
@@ -311,8 +311,8 @@ func CreateSummary(conversationID string, summaryContent string, summarizedUpToM
 }
 
 // GetActiveSummary retrieves the most recent summary for a conversation
-func GetActiveSummary(conversationID string) (*ConversationSummary, error) {
-	db := GetDB()
+func (p *PostgresDB) GetActiveSummary(conversationID string) (*ConversationSummary, error) {
+	db := p.db
 
 	var summary ConversationSummary
 	query := `
@@ -342,8 +342,8 @@ func GetActiveSummary(conversationID string) (*ConversationSummary, error) {
 }
 
 // GetAllSummaries retrieves all summaries for a conversation in chronological order
-func GetAllSummaries(conversationID string) ([]ConversationSummary, error) {
-	db := GetDB()
+func (p *PostgresDB) GetAllSummaries(conversationID string) ([]ConversationSummary, error) {
+	db := p.db
 
 	query := `
 	SELECT id, conversation_id, summary_content, summarized_up_to_message_id, usage_count, created_at
@@ -379,8 +379,8 @@ func GetAllSummaries(conversationID string) ([]ConversationSummary, error) {
 }
 
 // UpdateConversationActiveSummary updates the active summary for a conversation
-func UpdateConversationActiveSummary(conversationID string, summaryID string) error {
-	db := GetDB()
+func (p *PostgresDB) UpdateConversationActiveSummary(conversationID string, summaryID string) error {
+	db := p.db
 
 	query := `UPDATE conversations SET active_summary_id = $1 WHERE id = $2`
 	_, err := db.Exec(query, summaryID, conversationID)
@@ -393,8 +393,8 @@ func UpdateConversationActiveSummary(conversationID string, summaryID string) er
 }
 
 // IncrementSummaryUsageCount increments the usage count for a summary
-func IncrementSummaryUsageCount(summaryID string) error {
-	db := GetDB()
+func (p *PostgresDB) IncrementSummaryUsageCount(summaryID string) error {
+	db := p.db
 
 	query := `UPDATE conversation_summaries SET usage_count = usage_count + 1 WHERE id = $1`
 	_, err := db.Exec(query, summaryID)
@@ -407,8 +407,8 @@ func IncrementSummaryUsageCount(summaryID string) error {
 }
 
 // GetMessagesAfterMessage retrieves all messages after a specific message ID in a conversation
-func GetMessagesAfterMessage(conversationID string, afterMessageID string) ([]llm.Message, error) {
-	db := GetDB()
+func (p *PostgresDB) GetMessagesAfterMessage(conversationID string, afterMessageID string) ([]llm.Message, error) {
+	db := p.db
 
 	query := `
 	SELECT role, content
@@ -441,8 +441,8 @@ func GetMessagesAfterMessage(conversationID string, afterMessageID string) ([]ll
 }
 
 // GetLastMessageID retrieves the ID of the last message in a conversation
-func GetLastMessageID(conversationID string) (*string, error) {
-	db := GetDB()
+func (p *PostgresDB) GetLastMessageID(conversationID string) (*string, error) {
+	db := p.db
 
 	var messageID string
 	query := `
@@ -464,3 +464,75 @@ func GetLastMessageID(conversationID string) (*string, error) {
 	return &messageID, nil
 }
 
+// Standalone function wrappers for backwards compatibility
+// These delegate to the PostgresDB methods
+
+func CreateConversation(userID string, title string, responseFormat string, responseSchema string) (*Conversation, error) {
+	db := NewPostgresDB()
+	return db.CreateConversation(userID, title, responseFormat, responseSchema)
+}
+
+func GetConversationsByUser(userID string) ([]Conversation, error) {
+	db := NewPostgresDB()
+	return db.GetConversationsByUser(userID)
+}
+
+func GetConversation(convID string) (*Conversation, error) {
+	db := NewPostgresDB()
+	return db.GetConversation(convID)
+}
+
+func AddMessage(conversationID string, role, content, model string, temperature *float64, provider string, generationID string, promptTokens, completionTokens, totalTokens *int, totalCost *float64, latency, generationTime *int) (*Message, error) {
+	db := NewPostgresDB()
+	return db.AddMessage(conversationID, role, content, model, temperature, provider, generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime)
+}
+
+func GetConversationMessages(conversationID string) ([]llm.Message, error) {
+	db := NewPostgresDB()
+	return db.GetConversationMessages(conversationID)
+}
+
+func GetConversationMessagesWithDetails(conversationID string) ([]Message, error) {
+	db := NewPostgresDB()
+	return db.GetConversationMessagesWithDetails(conversationID)
+}
+
+func DeleteConversation(convID string) error {
+	db := NewPostgresDB()
+	return db.DeleteConversation(convID)
+}
+
+func CreateSummary(conversationID string, summaryContent string, summarizedUpToMessageID *string) (*ConversationSummary, error) {
+	db := NewPostgresDB()
+	return db.CreateSummary(conversationID, summaryContent, summarizedUpToMessageID)
+}
+
+func GetActiveSummary(conversationID string) (*ConversationSummary, error) {
+	db := NewPostgresDB()
+	return db.GetActiveSummary(conversationID)
+}
+
+func GetAllSummaries(conversationID string) ([]ConversationSummary, error) {
+	db := NewPostgresDB()
+	return db.GetAllSummaries(conversationID)
+}
+
+func UpdateConversationActiveSummary(conversationID string, summaryID string) error {
+	db := NewPostgresDB()
+	return db.UpdateConversationActiveSummary(conversationID, summaryID)
+}
+
+func IncrementSummaryUsageCount(summaryID string) error {
+	db := NewPostgresDB()
+	return db.IncrementSummaryUsageCount(summaryID)
+}
+
+func GetMessagesAfterMessage(conversationID string, afterMessageID string) ([]llm.Message, error) {
+	db := NewPostgresDB()
+	return db.GetMessagesAfterMessage(conversationID, afterMessageID)
+}
+
+func GetLastMessageID(conversationID string) (*string, error) {
+	db := NewPostgresDB()
+	return db.GetLastMessageID(conversationID)
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -16,7 +17,24 @@ type contextKey string
 
 const UserContextKey contextKey = "user"
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
+var jwtSecret []byte
+
+// getJWTSecret retrieves and validates the JWT secret from environment variable
+func getJWTSecret() []byte {
+	if jwtSecret != nil {
+		return jwtSecret
+	}
+
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("JWT_SECRET environment variable must be set")
+	}
+	if len(secret) < 32 {
+		log.Fatal("JWT_SECRET must be at least 32 characters")
+	}
+	jwtSecret = []byte(secret)
+	return jwtSecret
+}
 
 type Claims struct {
 	Username string `json:"username"`
@@ -43,6 +61,27 @@ type RegisterResponse struct {
 	Token   string `json:"token"`
 }
 
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// sendError sends a standardized JSON error response
+func sendError(w http.ResponseWriter, status int, message string, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	errResp := ErrorResponse{
+		Code:    status,
+		Message: message,
+	}
+	if err != nil {
+		errResp.Error = err.Error()
+	}
+	json.NewEncoder(w).Encode(errResp)
+}
+
 func GenerateToken(username string) (string, error) {
 	claims := Claims{
 		Username: username,
@@ -53,12 +92,12 @@ func GenerateToken(username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getJWTSecret())
 }
 
 func ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return getJWTSecret(), nil
 	})
 
 	if err != nil {
@@ -75,18 +114,18 @@ func ValidateToken(tokenString string) (*Claims, error) {
 // LoginHandler authenticates user and returns JWT token
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendError(w, http.StatusBadRequest, "Invalid request body", err)
 		return
 	}
 
 	if req.Username == "" || req.Password == "" {
-		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		sendError(w, http.StatusBadRequest, "Username and password are required", nil)
 		return
 	}
 
@@ -94,14 +133,14 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	user, err := db.GetUserByUsername(req.Username)
 	if err != nil {
 		log.Printf("[AUTH] Login failed for user %s: user not found", req.Username)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		sendError(w, http.StatusUnauthorized, "Invalid credentials", nil)
 		return
 	}
 
 	// Verify password
 	if !user.VerifyPassword(req.Password) {
 		log.Printf("[AUTH] Login failed for user %s: invalid password", req.Username)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		sendError(w, http.StatusUnauthorized, "Invalid credentials", nil)
 		return
 	}
 
@@ -109,7 +148,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	token, err := GenerateToken(req.Username)
 	if err != nil {
 		log.Printf("[AUTH] Error generating token: %v", err)
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		sendError(w, http.StatusInternalServerError, "Error generating token", err)
 		return
 	}
 
@@ -122,23 +161,23 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 // RegisterHandler creates a new user account
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendError(w, http.StatusBadRequest, "Invalid request body", err)
 		return
 	}
 
 	if req.Username == "" || req.Password == "" {
-		http.Error(w, "Username and password are required", http.StatusBadRequest)
+		sendError(w, http.StatusBadRequest, "Username and password are required", nil)
 		return
 	}
 
 	if len(req.Password) < 6 {
-		http.Error(w, "Password must be at least 6 characters", http.StatusBadRequest)
+		sendError(w, http.StatusBadRequest, "Password must be at least 6 characters", nil)
 		return
 	}
 
@@ -147,10 +186,10 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("[AUTH] Registration failed for user %s: %v", req.Username, err)
 		if err.Error() == "username already exists" {
-			http.Error(w, "Username already exists", http.StatusConflict)
+			sendError(w, http.StatusConflict, "Username already exists", err)
 			return
 		}
-		http.Error(w, "Error creating user", http.StatusInternalServerError)
+		sendError(w, http.StatusInternalServerError, "Error creating user", err)
 		return
 	}
 
@@ -158,7 +197,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	token, err := GenerateToken(user.Username)
 	if err != nil {
 		log.Printf("[AUTH] Error generating token: %v", err)
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		sendError(w, http.StatusInternalServerError, "Error generating token", err)
 		return
 	}
 
@@ -176,19 +215,19 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+			sendError(w, http.StatusUnauthorized, "Missing authorization header", nil)
 			return
 		}
 
 		bearerToken := strings.Split(authHeader, " ")
 		if len(bearerToken) != 2 || bearerToken[0] != "Bearer" {
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			sendError(w, http.StatusUnauthorized, "Invalid authorization header format", nil)
 			return
 		}
 
 		claims, err := ValidateToken(bearerToken[1])
 		if err != nil {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			sendError(w, http.StatusUnauthorized, "Invalid token", err)
 			return
 		}
 

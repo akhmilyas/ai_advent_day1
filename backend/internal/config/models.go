@@ -14,36 +14,78 @@ type Model struct {
 	Tier     string `json:"tier"`
 }
 
-var availableModels []Model
+// ModelsConfig holds the available models configuration
+type ModelsConfig struct {
+	models []Model
+}
 
-// LoadModels loads the available models from the config file
-func LoadModels(configPath string) error {
+// NewModelsConfig creates a new models configuration from a file
+func NewModelsConfig(configPath string) (*ModelsConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = json.Unmarshal(data, &availableModels)
+	var models []Model
+	err = json.Unmarshal(data, &models)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &ModelsConfig{models: models}, nil
 }
 
 // GetAvailableModels returns the list of available models
-func GetAvailableModels() []Model {
-	return availableModels
+func (mc *ModelsConfig) GetAvailableModels() []Model {
+	return mc.models
 }
 
 // IsValidModel checks if a model ID is in the list of available models
-func IsValidModel(modelID string) bool {
-	for _, model := range availableModels {
+func (mc *ModelsConfig) IsValidModel(modelID string) bool {
+	for _, model := range mc.models {
 		if model.ID == modelID {
 			return true
 		}
 	}
 	return false
+}
+
+// GetDefaultModel returns the first model as the default
+func (mc *ModelsConfig) GetDefaultModel() string {
+	if len(mc.models) > 0 {
+		return mc.models[0].ID
+	}
+	// Fallback in case no models are configured (shouldn't happen)
+	return "meta-llama/llama-3.3-8b-instruct:free"
+}
+
+// Legacy global functions for backward compatibility
+var globalModelsConfig *ModelsConfig
+
+// LoadModels loads the available models from the config file (legacy)
+func LoadModels(configPath string) error {
+	config, err := NewModelsConfig(configPath)
+	if err != nil {
+		return err
+	}
+	globalModelsConfig = config
+	return nil
+}
+
+// GetAvailableModels returns the list of available models (legacy)
+func GetAvailableModels() []Model {
+	if globalModelsConfig == nil {
+		return []Model{}
+	}
+	return globalModelsConfig.GetAvailableModels()
+}
+
+// IsValidModel checks if a model ID is in the list of available models (legacy)
+func IsValidModel(modelID string) bool {
+	if globalModelsConfig == nil {
+		return false
+	}
+	return globalModelsConfig.IsValidModel(modelID)
 }
 
 // GetDefaultModelPath returns the default path to the models config file

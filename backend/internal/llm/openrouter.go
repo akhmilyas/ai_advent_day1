@@ -79,7 +79,7 @@ func GetAPIKey() string {
 }
 
 func GetModel() string {
-	// Get the first model from config as default
+	// Get the first model from config as default (legacy global function)
 	models := config.GetAvailableModels()
 	if len(models) > 0 {
 		return models[0].ID

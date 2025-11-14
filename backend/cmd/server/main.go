@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chat-app/internal/app"
 	"chat-app/internal/auth"
 	"chat-app/internal/config"
 	"chat-app/internal/context"
@@ -44,10 +45,11 @@ func main() {
 	// Load models configuration
 	log.Printf("Loading models configuration...")
 	modelsPath := config.GetDefaultModelPath()
-	if err := config.LoadModels(modelsPath); err != nil {
+	modelsConfig, err := config.NewModelsConfig(modelsPath)
+	if err != nil {
 		log.Fatalf("Failed to load models configuration: %v", err)
 	}
-	log.Printf("Loaded %d models", len(config.GetAvailableModels()))
+	log.Printf("Loaded %d models", len(modelsConfig.GetAvailableModels()))
 
 	// Load War and Peace text
 	log.Printf("Loading War and Peace context...")
@@ -61,8 +63,14 @@ func main() {
 		log.Fatalf("Failed to seed demo user: %v", err)
 	}
 
-	// Create chat handlers
-	chatHandler := handlers.NewChatHandlers()
+	// Create database instance
+	database := db.NewPostgresDB()
+
+	// Initialize application config with database and models
+	appConfig := app.NewConfig(database, modelsConfig)
+
+	// Create chat handlers with dependency injection
+	chatHandler := handlers.NewChatHandlers(appConfig)
 
 	// Create new ServeMux to use Go 1.22+ routing features for path parameters
 	mux := http.NewServeMux()

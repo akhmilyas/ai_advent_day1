@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"chat-app/internal/app"
 	"chat-app/internal/auth"
 	"chat-app/internal/config"
 	"chat-app/internal/context"
@@ -101,16 +102,180 @@ type SummariesResponse struct {
 	Summaries []SummaryData `json:"summaries"`
 }
 
-type ChatHandlers struct{}
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
 
-func NewChatHandlers() *ChatHandlers {
-	return &ChatHandlers{}
+type ChatHandlers struct{
+	config *app.Config
+}
+
+func NewChatHandlers(config *app.Config) *ChatHandlers {
+	return &ChatHandlers{
+		config: config,
+	}
+}
+
+// Helper functions for common operations
+
+// sendError sends a standardized JSON error response
+func (ch *ChatHandlers) sendError(w http.ResponseWriter, status int, message string, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	errResp := ErrorResponse{
+		Code:    status,
+		Message: message,
+	}
+	if err != nil {
+		errResp.Error = err.Error()
+	}
+	json.NewEncoder(w).Encode(errResp)
+}
+
+// getUserFromContext extracts and validates user from request context
+func (ch *ChatHandlers) getUserFromContext(r *http.Request) (*db.User, error) {
+	username := r.Context().Value(auth.UserContextKey).(string)
+	return ch.config.DB.GetUserByUsername(username)
+}
+
+// getOrCreateConversation retrieves an existing conversation or creates a new one
+func (ch *ChatHandlers) getOrCreateConversation(req *ChatRequest, userID string) (*db.Conversation, error) {
+	if req.ConversationID != "" {
+		return ch.config.DB.GetConversation(req.ConversationID)
+	}
+
+	// Create new conversation with first message as title and specified format
+	title := req.Message
+	// Use rune slicing to avoid cutting multi-byte UTF-8 characters
+	runes := []rune(title)
+	if len(runes) > 100 {
+		title = string(runes[:100])
+	}
+	return ch.config.DB.CreateConversation(userID, title, req.ResponseFormat, req.ResponseSchema)
+}
+
+// validateConversationOwnership checks if the user owns the conversation
+func (ch *ChatHandlers) validateConversationOwnership(conversation *db.Conversation, userID string) error {
+	if conversation.UserID != userID {
+		return fmt.Errorf("unauthorized: user does not own this conversation")
+	}
+	return nil
+}
+
+// validateModel checks if the provided model ID is valid
+func (ch *ChatHandlers) validateModel(modelID string) error {
+	if modelID != "" && !ch.config.ModelsConfig.IsValidModel(modelID) {
+		return fmt.Errorf("invalid model specified")
+	}
+	return nil
+}
+
+// getConversationHistory retrieves the conversation history considering summaries
+func (ch *ChatHandlers) getConversationHistory(conversationID string) ([]llm.Message, *db.ConversationSummary, error) {
+	// Check if there's an active summary for this conversation
+	activeSummary, err := ch.config.DB.GetActiveSummary(conversationID)
+	var currentHistory []llm.Message
+
+	if err == nil && activeSummary != nil {
+		// Active summary exists - use it instead of full history
+		log.Printf("[CHAT] Using active summary (usage count: %d)", activeSummary.UsageCount)
+
+		// Get messages after the summarized point
+		if activeSummary.SummarizedUpToMessageID != nil {
+			newMessages, err := ch.config.DB.GetMessagesAfterMessage(conversationID, *activeSummary.SummarizedUpToMessageID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error getting messages after summary: %w", err)
+			}
+			currentHistory = newMessages
+			log.Printf("[CHAT] Using summary + %d new messages", len(newMessages))
+		} else {
+			// No messages after summary (shouldn't happen, but handle gracefully)
+			currentHistory = []llm.Message{}
+			log.Printf("[CHAT] Using summary with no new messages")
+		}
+
+		// Increment summary usage count
+		if err := ch.config.DB.IncrementSummaryUsageCount(activeSummary.ID); err != nil {
+			log.Printf("[CHAT] Warning: failed to increment summary usage count: %v", err)
+		}
+
+		return currentHistory, activeSummary, nil
+	}
+
+	// No active summary - use full conversation history
+	currentHistory, err = ch.config.DB.GetConversationMessages(conversationID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting conversation history: %w", err)
+	}
+	log.Printf("[CHAT] Using full conversation history: %d messages", len(currentHistory))
+
+	return currentHistory, nil, nil
+}
+
+// buildSystemPrompt builds the effective system prompt based on conversation format and summary
+func (ch *ChatHandlers) buildSystemPrompt(conversation *db.Conversation, activeSummary *db.ConversationSummary, customPrompt string, useWarAndPeace bool, warAndPeacePercent int) string {
+	var effectiveSystemPrompt string
+
+	// Add summary context if available
+	summaryContext := ""
+	if activeSummary != nil {
+		summaryContext = fmt.Sprintf("Previous conversation summary:\n%s\n\n", activeSummary.SummaryContent)
+		log.Printf("[CHAT] Using summary as context with user prompt")
+	}
+
+	// Build format-specific system prompt
+	if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
+		effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
+	} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
+		effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
+	} else {
+		// For text format, combine summary with user's custom system prompt
+		effectiveSystemPrompt = summaryContext + customPrompt
+	}
+
+	// Append War and Peace context if requested
+	if useWarAndPeace {
+		effectiveSystemPrompt = ch.appendWarAndPeaceContext(effectiveSystemPrompt, warAndPeacePercent)
+	}
+
+	return effectiveSystemPrompt
+}
+
+// appendWarAndPeaceContext appends War and Peace text to the system prompt
+func (ch *ChatHandlers) appendWarAndPeaceContext(systemPrompt string, percent int) string {
+	warAndPeaceText := context.GetWarAndPeace()
+	if warAndPeaceText == "" {
+		log.Printf("[CHAT] Warning: War and Peace text not loaded")
+		return systemPrompt
+	}
+
+	// Calculate how much of the text to include based on percentage
+	if percent <= 0 || percent > 100 {
+		percent = 100 // Default to 100% if invalid
+	}
+
+	// Calculate the number of characters to include
+	totalChars := len(warAndPeaceText)
+	charsToInclude := (totalChars * percent) / 100
+
+	// Get the substring from the beginning
+	textToAppend := warAndPeaceText[:charsToInclude]
+
+	log.Printf("[CHAT] Appended War and Peace context: %d%% (%.2f MB of %.2f MB)",
+		percent,
+		float64(len(textToAppend))/1024/1024,
+		float64(totalChars)/1024/1024)
+
+	return systemPrompt + "\n\nContext (War and Peace by Leo Tolstoy):\n" + textToAppend
 }
 
 // ChatHandler is the REST endpoint for chat
 func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
@@ -119,74 +284,59 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		ch.sendError(w, http.StatusBadRequest, "Invalid request body", err)
 		return
 	}
 
 	if req.Message == "" {
-		http.Error(w, "Message cannot be empty", http.StatusBadRequest)
+		ch.sendError(w, http.StatusBadRequest, "Message cannot be empty", nil)
 		return
 	}
 
 	log.Printf("[CHAT] User input: %s", req.Message)
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.getUserFromContext(r)
 	if err != nil {
 		log.Printf("[CHAT] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get or create conversation
-	var conversation *db.Conversation
+	conversation, err := ch.getOrCreateConversation(&req, user.ID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting/creating conversation: %v", err)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
+		return
+	}
+
+	// Verify user owns this conversation
 	if req.ConversationID != "" {
-		conversation, err = db.GetConversation(req.ConversationID)
-		if err != nil {
-			log.Printf("[CHAT] Error getting conversation: %v", err)
-			http.Error(w, "Conversation not found", http.StatusNotFound)
-			return
-		}
-		// Verify user owns this conversation
-		if conversation.UserID != user.ID {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
-			return
-		}
-	} else {
-		// Create new conversation with first message as title and specified format
-		title := req.Message
-		// Use rune slicing to avoid cutting multi-byte UTF-8 characters
-		runes := []rune(title)
-		if len(runes) > 100 {
-			title = string(runes[:100])
-		}
-		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
-		if err != nil {
-			log.Printf("[CHAT] Error creating conversation: %v", err)
-			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
+		if err := ch.validateConversationOwnership(conversation, user.ID); err != nil {
+			ch.sendError(w, http.StatusForbidden, "Unauthorized", err)
 			return
 		}
 	}
 
 	// Validate model if provided
-	model := req.Model
-	if model != "" && !config.IsValidModel(model) {
-		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+	if err := ch.validateModel(req.Model); err != nil {
+		ch.sendError(w, http.StatusBadRequest, "Invalid model specified", err)
 		return
 	}
 
 	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
+	if _, err := ch.config.DB.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
-		http.Error(w, "Error saving message", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error saving message", err)
 		return
 	}
 
 	// Get conversation history
-	currentHistory, err := db.GetConversationMessages(conversation.ID)
+	currentHistory, err := ch.config.DB.GetConversationMessages(conversation.ID)
 	if err != nil {
 		log.Printf("[CHAT] Error getting conversation history: %v", err)
-		http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversation history", err)
 		return
 	}
 
@@ -197,29 +347,25 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[CHAT] Using provider: %T", provider)
 
 	// Get response with full conversation history
-	response, err := provider.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, model, req.Temperature)
+	response, err := provider.ChatWithHistory(currentHistory, req.SystemPrompt, conversation.ResponseFormat, req.Model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ChatResponse{
-			Error: err.Error(),
-		})
+		ch.sendError(w, http.StatusInternalServerError, "Error from LLM provider", err)
 		return
 	}
 
 	log.Printf("[CHAT] LLM response: %s", response)
 
 	// Determine which model was actually used
-	usedModel := model
+	usedModel := req.Model
 	if usedModel == "" {
 		usedModel = provider.GetDefaultModel()
 	}
 
 	// Add assistant response to database with model, temperature, and provider (no usage data for non-streaming)
-	if _, err := db.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, req.Provider, "", nil, nil, nil, nil, nil, nil); err != nil {
+	if _, err := ch.config.DB.AddMessage(conversation.ID, "assistant", response, usedModel, req.Temperature, req.Provider, "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding assistant message: %v", err)
-		http.Error(w, "Error saving response", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error saving response", err)
 		return
 	}
 
@@ -234,7 +380,7 @@ func (ch *ChatHandlers) ChatHandler(w http.ResponseWriter, r *http.Request) {
 // ChatStreamHandler is the SSE endpoint for streaming chat responses
 func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
@@ -243,172 +389,76 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		ch.sendError(w, http.StatusBadRequest, "Invalid request body", err)
 		return
 	}
 
 	if req.Message == "" {
-		http.Error(w, "Message cannot be empty", http.StatusBadRequest)
+		ch.sendError(w, http.StatusBadRequest, "Message cannot be empty", nil)
 		return
 	}
 
 	log.Printf("[CHAT] User input (stream): %s", req.Message)
 
 	// Get user from database
-	user, err := db.GetUserByUsername(username)
+	user, err := ch.getUserFromContext(r)
 	if err != nil {
 		log.Printf("[CHAT] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get or create conversation
-	var conversation *db.Conversation
+	conversation, err := ch.getOrCreateConversation(&req, user.ID)
+	if err != nil {
+		log.Printf("[CHAT] Error getting/creating conversation: %v", err)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
+		return
+	}
+
+	// Verify user owns this conversation
 	if req.ConversationID != "" {
-		conversation, err = db.GetConversation(req.ConversationID)
-		if err != nil {
-			log.Printf("[CHAT] Error getting conversation: %v", err)
-			http.Error(w, "Conversation not found", http.StatusNotFound)
-			return
-		}
-		// Verify user owns this conversation
-		if conversation.UserID != user.ID {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
-			return
-		}
-	} else {
-		// Create new conversation with first message as title and specified format
-		title := req.Message
-		// Use rune slicing to avoid cutting multi-byte UTF-8 characters
-		runes := []rune(title)
-		if len(runes) > 100 {
-			title = string(runes[:100])
-		}
-		conversation, err = db.CreateConversation(user.ID, title, req.ResponseFormat, req.ResponseSchema)
-		if err != nil {
-			log.Printf("[CHAT] Error creating conversation: %v", err)
-			http.Error(w, "Error creating conversation", http.StatusInternalServerError)
+		if err := ch.validateConversationOwnership(conversation, user.ID); err != nil {
+			ch.sendError(w, http.StatusForbidden, "Unauthorized", err)
 			return
 		}
 	}
 
 	// Validate model if provided
-	model := req.Model
-	if model != "" && !config.IsValidModel(model) {
-		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+	if err := ch.validateModel(req.Model); err != nil {
+		ch.sendError(w, http.StatusBadRequest, "Invalid model specified", err)
 		return
 	}
 
 	// Add user message to database (user messages don't have a model, temperature, provider, or usage data)
-	if _, err := db.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
+	if _, err := ch.config.DB.AddMessage(conversation.ID, "user", req.Message, "", nil, "", "", nil, nil, nil, nil, nil, nil); err != nil {
 		log.Printf("[CHAT] Error adding user message: %v", err)
-		http.Error(w, "Error saving message", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error saving message", err)
 		return
 	}
 
-	// Check if there's an active summary for this conversation
-	activeSummary, err := db.GetActiveSummary(conversation.ID)
-	var currentHistory []llm.Message
-
-	if err == nil && activeSummary != nil {
-		// Active summary exists - use it instead of full history
-		log.Printf("[CHAT] Using active summary (usage count: %d)", activeSummary.UsageCount)
-
-		// Get messages after the summarized point
-		if activeSummary.SummarizedUpToMessageID != nil {
-			newMessages, err := db.GetMessagesAfterMessage(conversation.ID, *activeSummary.SummarizedUpToMessageID)
-			if err != nil {
-				log.Printf("[CHAT] Error getting messages after summary: %v", err)
-				http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
-				return
-			}
-			currentHistory = newMessages
-			log.Printf("[CHAT] Using summary + %d new messages", len(newMessages))
-		} else {
-			// No messages after summary (shouldn't happen, but handle gracefully)
-			currentHistory = []llm.Message{}
-			log.Printf("[CHAT] Using summary with no new messages")
-		}
-
-		// Increment summary usage count
-		if err := db.IncrementSummaryUsageCount(activeSummary.ID); err != nil {
-			log.Printf("[CHAT] Warning: failed to increment summary usage count: %v", err)
-		}
-	} else {
-		// No active summary - use full conversation history
-		currentHistory, err = db.GetConversationMessages(conversation.ID)
-		if err != nil {
-			log.Printf("[CHAT] Error getting conversation history: %v", err)
-			http.Error(w, "Error retrieving conversation history", http.StatusInternalServerError)
-			return
-		}
-		log.Printf("[CHAT] Using full conversation history: %d messages", len(currentHistory))
+	// Get conversation history (considering summaries)
+	currentHistory, activeSummary, err := ch.getConversationHistory(conversation.ID)
+	if err != nil {
+		log.Printf("[CHAT] %v", err)
+		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversation history", err)
+		return
 	}
 
-	// Set SSE headers
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		ch.sendError(w, http.StatusInternalServerError, "Streaming not supported", nil)
+		return
+	}
+
+	// Set SSE headers (after flusher check)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
 	// Build the system prompt based on conversation's response format (stored in DB)
-	// If there's an active summary, combine it with the user's custom prompt
-	var effectiveSystemPrompt string
-	if activeSummary != nil {
-		// Summary exists - use it as context and add user's system prompt
-		summaryContext := fmt.Sprintf("Previous conversation summary:\n%s\n\n", activeSummary.SummaryContent)
-
-		if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
-			effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
-		} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
-			effectiveSystemPrompt = summaryContext + fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
-		} else {
-			// For text format, combine summary with user's custom system prompt
-			effectiveSystemPrompt = summaryContext + req.SystemPrompt
-		}
-		log.Printf("[CHAT] Using summary as context with user prompt")
-	} else if conversation.ResponseFormat == "json" && conversation.ResponseSchema != "" {
-		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid JSON that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw JSON.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid JSON matching this schema.", conversation.ResponseSchema)
-	} else if conversation.ResponseFormat == "xml" && conversation.ResponseSchema != "" {
-		effectiveSystemPrompt = fmt.Sprintf("You must respond ONLY with valid XML that matches this exact schema. Do not include any explanatory text, markdown formatting, or code blocks - just the raw XML.\n\nSchema:\n%s\n\nRemember: Your entire response must be valid XML matching this schema.", conversation.ResponseSchema)
-	} else {
-		// For text format, use custom system prompt from request
-		effectiveSystemPrompt = req.SystemPrompt
-	}
-
-	// Append War and Peace context if requested
-	if req.UseWarAndPeace {
-		warAndPeaceText := context.GetWarAndPeace()
-		if warAndPeaceText != "" {
-			// Calculate how much of the text to include based on percentage
-			percent := req.WarAndPeacePercent
-			if percent <= 0 || percent > 100 {
-				percent = 100 // Default to 100% if invalid
-			}
-
-			// Calculate the number of characters to include
-			totalChars := len(warAndPeaceText)
-			charsToInclude := (totalChars * percent) / 100
-
-			// Get the substring from the beginning
-			textToAppend := warAndPeaceText[:charsToInclude]
-
-			effectiveSystemPrompt = effectiveSystemPrompt + "\n\nContext (War and Peace by Leo Tolstoy):\n" + textToAppend
-			log.Printf("[CHAT] Appended War and Peace context: %d%% (%.2f MB of %.2f MB)",
-				percent,
-				float64(len(textToAppend))/1024/1024,
-				float64(totalChars)/1024/1024)
-		} else {
-			log.Printf("[CHAT] Warning: War and Peace text not loaded")
-		}
-	}
-
+	effectiveSystemPrompt := ch.buildSystemPrompt(conversation, activeSummary, req.SystemPrompt, req.UseWarAndPeace, req.WarAndPeacePercent)
 	log.Printf("[CHAT] Using conversation format: %s", conversation.ResponseFormat)
 
 	// Get LLM provider based on request
@@ -416,23 +466,23 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 	log.Printf("[CHAT] Using provider for streaming: %T", provider)
 
 	// Get streaming response from LLM
-	chunks, err := provider.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, model, req.Temperature)
+	chunks, err := provider.ChatWithHistoryStream(currentHistory, effectiveSystemPrompt, conversation.ResponseFormat, req.Model, req.Temperature)
 	if err != nil {
 		log.Printf("[CHAT] Error from LLM stream: %v", err)
 		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
 		return
 	}
 
-	// Determine which model was actually used
-	usedModel := model
-	if usedModel == "" {
-		usedModel = provider.GetDefaultModel()
-	}
-
 	// Send conversation ID as first event
 	fmt.Fprintf(w, "data: CONV_ID:%s\n\n", conversation.ID)
 	flusher.Flush()
 	log.Printf("[CHAT] Sent conversation ID: %s", conversation.ID)
+
+	// Determine which model was actually used
+	usedModel := req.Model
+	if usedModel == "" {
+		usedModel = provider.GetDefaultModel()
+	}
 
 	// Send model as second event
 	fmt.Fprintf(w, "data: MODEL:%s\n\n", usedModel)
@@ -525,7 +575,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 
 	// Add assistant response to database after streaming completes
 	if fullResponse != "" {
-		if _, err := db.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature, req.Provider,
+		if _, err := ch.config.DB.AddMessage(conversation.ID, "assistant", fullResponse, usedModel, req.Temperature, req.Provider,
 			generationID, promptTokens, completionTokens, totalTokens, totalCost, latency, generationTime); err != nil {
 			log.Printf("[CHAT] Error adding assistant message: %v", err)
 		}
@@ -540,7 +590,7 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 // GetConversationsHandler returns all conversations for the authenticated user
 func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
@@ -551,15 +601,15 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
 		log.Printf("[CHAT] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get all conversations for user
-	conversations, err := db.GetConversationsByUser(user.ID)
+	conversations, err := ch.config.DB.GetConversationsByUser(user.ID)
 	if err != nil {
 		log.Printf("[CHAT] Error getting conversations: %v", err)
-		http.Error(w, "Error retrieving conversations", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error retrieving conversations", err)
 		return
 	}
 
@@ -568,7 +618,7 @@ func (ch *ChatHandlers) GetConversationsHandler(w http.ResponseWriter, r *http.R
 	for _, conv := range conversations {
 		// Get active summary for this conversation if it exists
 		var summarizedUpToMsgID *string
-		if summary, err := db.GetActiveSummary(conv.ID); err == nil && summary != nil {
+		if summary, err := ch.config.DB.GetActiveSummary(conv.ID); err == nil && summary != nil {
 			summarizedUpToMsgID = summary.SummarizedUpToMessageID
 		}
 
@@ -599,29 +649,29 @@ func (ch *ChatHandlers) GetConversationMessagesHandler(w http.ResponseWriter, r 
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
 		log.Printf("[CHAT] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get conversation and verify ownership
-	conversation, err := db.GetConversation(convID)
+	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
 		log.Printf("[CHAT] Error getting conversation: %v", err)
-		http.Error(w, "Conversation not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
 
 	// Verify user owns this conversation
 	if conversation.UserID != user.ID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		ch.sendError(w, http.StatusForbidden, "Unauthorized", nil)
 		return
 	}
 
 	// Get messages for conversation
-	messages, err := db.GetConversationMessagesWithDetails(convID)
+	messages, err := ch.config.DB.GetConversationMessagesWithDetails(convID)
 	if err != nil {
 		log.Printf("[CHAT] Error getting messages: %v", err)
-		http.Error(w, "Error retrieving messages", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error retrieving messages", err)
 		return
 	}
 
@@ -660,28 +710,28 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
 		log.Printf("[CHAT] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get conversation and verify ownership
-	conversation, err := db.GetConversation(convID)
+	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
 		log.Printf("[CHAT] Error getting conversation: %v", err)
-		http.Error(w, "Conversation not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
 
 	// Verify user owns this conversation
 	if conversation.UserID != user.ID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		ch.sendError(w, http.StatusForbidden, "Unauthorized", nil)
 		return
 	}
 
 	// Delete the conversation
-	if err := db.DeleteConversation(convID); err != nil {
+	if err := ch.config.DB.DeleteConversation(convID); err != nil {
 		log.Printf("[CHAT] Error deleting conversation: %v", err)
-		http.Error(w, "Error deleting conversation", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error deleting conversation", err)
 		return
 	}
 
@@ -695,11 +745,11 @@ func (ch *ChatHandlers) DeleteConversationHandler(w http.ResponseWriter, r *http
 // GetModelsHandler returns the list of available models
 func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
-	models := config.GetAvailableModels()
+	models := ch.config.ModelsConfig.GetAvailableModels()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ModelsResponse{
@@ -710,7 +760,7 @@ func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request)
 // SummarizeConversationHandler creates a summary of the conversation
 func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
@@ -729,44 +779,44 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
 		log.Printf("[SUMMARIZE] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get conversation and verify ownership
-	conversation, err := db.GetConversation(convID)
+	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
 		log.Printf("[SUMMARIZE] Error getting conversation: %v", err)
-		http.Error(w, "Conversation not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
 
 	// Verify user owns this conversation
 	if conversation.UserID != user.ID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		ch.sendError(w, http.StatusForbidden, "Unauthorized", nil)
 		return
 	}
 
 	// Check if there's an existing active summary
-	activeSummary, err := db.GetActiveSummary(convID)
+	activeSummary, err := ch.config.DB.GetActiveSummary(convID)
 	var messagesToSummarize []llm.Message
 	var lastMessageID *string
 
 	if err != nil || activeSummary == nil {
 		// No active summary exists - summarize all messages
 		log.Printf("[SUMMARIZE] No active summary found, summarizing all messages")
-		messagesToSummarize, err = db.GetConversationMessages(convID)
+		messagesToSummarize, err = ch.config.DB.GetConversationMessages(convID)
 		if err != nil {
 			log.Printf("[SUMMARIZE] Error getting conversation messages: %v", err)
-			http.Error(w, "Error retrieving messages", http.StatusInternalServerError)
+			ch.sendError(w, http.StatusInternalServerError, "Error retrieving messages", err)
 			return
 		}
 
 		// Get the last message ID
-		lastMessageID, err = db.GetLastMessageID(convID)
+		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
 		if err != nil {
 			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
-			http.Error(w, "Error retrieving last message", http.StatusInternalServerError)
+			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
 			return
 		}
 	} else if activeSummary.UsageCount >= 2 {
@@ -780,20 +830,20 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 
 		// Get messages after the last summarized message
 		if activeSummary.SummarizedUpToMessageID != nil {
-			newMessages, err := db.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
+			newMessages, err := ch.config.DB.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
 			if err != nil {
 				log.Printf("[SUMMARIZE] Error getting messages after last summarized: %v", err)
-				http.Error(w, "Error retrieving new messages", http.StatusInternalServerError)
+				ch.sendError(w, http.StatusInternalServerError, "Error retrieving new messages", err)
 				return
 			}
 			messagesToSummarize = append(messagesToSummarize, newMessages...)
 		}
 
 		// Get the last message ID
-		lastMessageID, err = db.GetLastMessageID(convID)
+		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
 		if err != nil {
 			log.Printf("[SUMMARIZE] Error getting last message ID: %v", err)
-			http.Error(w, "Error retrieving last message", http.StatusInternalServerError)
+			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
 			return
 		}
 	} else {
@@ -809,9 +859,8 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 	}
 
 	// Validate model if provided
-	model := req.Model
-	if model != "" && !config.IsValidModel(model) {
-		http.Error(w, "Invalid model specified", http.StatusBadRequest)
+	if err := ch.validateModel(req.Model); err != nil {
+		ch.sendError(w, http.StatusBadRequest, "Invalid model specified", err)
 		return
 	}
 
@@ -839,31 +888,27 @@ Format the summary in a clear, structured way that can be used as context for co
 
 	// Call LLM to generate summary (using ChatForSummarization to avoid default system prompt)
 	log.Printf("[SUMMARIZE] Calling LLM to generate summary with %d messages", len(messagesToSummarize))
-	summaryContent, err := provider.ChatForSummarization(messagesToSummarize, summarizationPrompt, model, req.Temperature)
+	summaryContent, err := provider.ChatForSummarization(messagesToSummarize, summarizationPrompt, req.Model, req.Temperature)
 	if err != nil {
 		log.Printf("[SUMMARIZE] Error from LLM: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(SummarizeResponse{
-			Error: err.Error(),
-		})
+		ch.sendError(w, http.StatusInternalServerError, "Error generating summary", err)
 		return
 	}
 
 	log.Printf("[SUMMARIZE] Generated summary: %s", summaryContent)
 
 	// Create new summary in database
-	summary, err := db.CreateSummary(convID, summaryContent, lastMessageID)
+	summary, err := ch.config.DB.CreateSummary(convID, summaryContent, lastMessageID)
 	if err != nil {
 		log.Printf("[SUMMARIZE] Error creating summary: %v", err)
-		http.Error(w, "Error saving summary", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error saving summary", err)
 		return
 	}
 
 	// Update conversation to use this new summary
-	if err := db.UpdateConversationActiveSummary(convID, summary.ID); err != nil {
+	if err := ch.config.DB.UpdateConversationActiveSummary(convID, summary.ID); err != nil {
 		log.Printf("[SUMMARIZE] Error updating active summary: %v", err)
-		http.Error(w, "Error updating conversation", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error updating conversation", err)
 		return
 	}
 
@@ -878,7 +923,7 @@ Format the summary in a clear, structured way that can be used as context for co
 // GetConversationSummariesHandler retrieves all summaries for a conversation
 func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		ch.sendError(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
 		return
 	}
 
@@ -890,29 +935,29 @@ func (ch *ChatHandlers) GetConversationSummariesHandler(w http.ResponseWriter, r
 	user, err := db.GetUserByUsername(username)
 	if err != nil {
 		log.Printf("[SUMMARIES] Error getting user: %v", err)
-		http.Error(w, "User not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "User not found", err)
 		return
 	}
 
 	// Get conversation and verify ownership
-	conversation, err := db.GetConversation(convID)
+	conversation, err := ch.config.DB.GetConversation(convID)
 	if err != nil {
 		log.Printf("[SUMMARIES] Error getting conversation: %v", err)
-		http.Error(w, "Conversation not found", http.StatusNotFound)
+		ch.sendError(w, http.StatusNotFound, "Conversation not found", err)
 		return
 	}
 
 	// Verify user owns this conversation
 	if conversation.UserID != user.ID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		ch.sendError(w, http.StatusForbidden, "Unauthorized", nil)
 		return
 	}
 
 	// Get all summaries for conversation
-	summaries, err := db.GetAllSummaries(convID)
+	summaries, err := ch.config.DB.GetAllSummaries(convID)
 	if err != nil {
 		log.Printf("[SUMMARIES] Error getting summaries: %v", err)
-		http.Error(w, "Error retrieving summaries", http.StatusInternalServerError)
+		ch.sendError(w, http.StatusInternalServerError, "Error retrieving summaries", err)
 		return
 	}
 
