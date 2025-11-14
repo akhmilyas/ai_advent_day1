@@ -4,6 +4,7 @@ import (
 	"chat-app/internal/config"
 	"chat-app/internal/db"
 	"chat-app/internal/logger"
+	"chat-app/internal/validation"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -20,13 +21,15 @@ const UserContextKey contextKey = "user"
 
 // AuthHandlers holds handlers with configuration
 type AuthHandlers struct {
-	config *config.AppConfig
+	config    *config.AppConfig
+	validator *validation.AuthRequestValidator
 }
 
 // NewAuthHandlers creates auth handlers with config
 func NewAuthHandlers(appConfig *config.AppConfig) *AuthHandlers {
 	return &AuthHandlers{
-		config: appConfig,
+		config:    appConfig,
+		validator: validation.NewAuthRequestValidator(),
 	}
 }
 
@@ -128,8 +131,9 @@ func (h *AuthHandlers) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.Password == "" {
-		sendError(w, http.StatusBadRequest, "Username and password are required", nil)
+	// Validate request
+	if err := h.validator.ValidateLoginRequest(req.Username, req.Password); err != nil {
+		sendError(w, http.StatusBadRequest, "Validation failed", err)
 		return
 	}
 
@@ -185,13 +189,9 @@ func (h *AuthHandlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.Password == "" {
-		sendError(w, http.StatusBadRequest, "Username and password are required", nil)
-		return
-	}
-
-	if len(req.Password) < 6 {
-		sendError(w, http.StatusBadRequest, "Password must be at least 6 characters", nil)
+	// Validate request
+	if err := h.validator.ValidateRegisterRequest(req.Username, req.Email, req.Password); err != nil {
+		sendError(w, http.StatusBadRequest, "Validation failed", err)
 		return
 	}
 

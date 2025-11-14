@@ -8,6 +8,7 @@ import (
 	"chat-app/internal/db"
 	"chat-app/internal/llm"
 	"chat-app/internal/logger"
+	"chat-app/internal/validation"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -110,12 +111,14 @@ type ErrorResponse struct {
 }
 
 type ChatHandlers struct{
-	config *app.Config
+	config    *app.Config
+	validator *validation.ChatRequestValidator
 }
 
 func NewChatHandlers(config *app.Config) *ChatHandlers {
 	return &ChatHandlers{
-		config: config,
+		config:    config,
+		validator: validation.NewChatRequestValidator(),
 	}
 }
 
@@ -408,8 +411,9 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Message == "" {
-		ch.sendError(w, http.StatusBadRequest, "Message cannot be empty", nil)
+	// Validate request
+	if err := ch.validator.ValidateChatRequest(req.Message, req.Temperature, req.WarAndPeacePercent, req.ResponseFormat, req.ResponseSchema); err != nil {
+		ch.sendError(w, http.StatusBadRequest, "Validation failed", err)
 		return
 	}
 
@@ -777,6 +781,63 @@ func (ch *ChatHandlers) GetModelsHandler(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// shouldCreateNewSummary determines if a new summary should be created
+// Returns true if there's no existing summary or if the existing summary has been used 2+ times
+func (ch *ChatHandlers) shouldCreateNewSummary(summary *db.ConversationSummary) bool {
+	return summary == nil || summary.UsageCount >= 2
+}
+
+// getAllMessagesForSummary retrieves all messages for a conversation to create the first summary
+func (ch *ChatHandlers) getAllMessagesForSummary(convID string) ([]llm.Message, *string, error) {
+	messages, err := ch.config.DB.GetConversationMessages(convID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting conversation messages: %w", err)
+	}
+
+	lastMessageID, err := ch.config.DB.GetLastMessageID(convID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting last message ID: %w", err)
+	}
+
+	return messages, lastMessageID, nil
+}
+
+// getIncrementalSummaryInput builds input for re-summarization using existing summary + new messages
+func (ch *ChatHandlers) getIncrementalSummaryInput(convID string, summary *db.ConversationSummary) ([]llm.Message, *string, error) {
+	// Start with the old summary as context
+	messages := []llm.Message{
+		{Role: "assistant", Content: fmt.Sprintf("Previous summary:\n%s", summary.SummaryContent)},
+	}
+
+	// Get messages after the last summarized message
+	if summary.SummarizedUpToMessageID != nil {
+		newMessages, err := ch.config.DB.GetMessagesAfterMessage(convID, *summary.SummarizedUpToMessageID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error getting messages after last summarized: %w", err)
+		}
+		messages = append(messages, newMessages...)
+	}
+
+	// Get the last message ID
+	lastMessageID, err := ch.config.DB.GetLastMessageID(convID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting last message ID: %w", err)
+	}
+
+	return messages, lastMessageID, nil
+}
+
+// buildSummarizationInput determines the messages to summarize based on existing summary state
+func (ch *ChatHandlers) buildSummarizationInput(convID string, summary *db.ConversationSummary) ([]llm.Message, *string, error) {
+	if summary == nil {
+		logger.Log.Info("No active summary found, summarizing all messages")
+		return ch.getAllMessagesForSummary(convID)
+	}
+
+	logger.Log.WithField("usage_count", summary.UsageCount).Info("Creating new summary from active summary")
+	return ch.getIncrementalSummaryInput(convID, summary)
+}
+
 // SummarizeConversationHandler creates a summary of the conversation
 func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -793,6 +854,12 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 		// Empty body is acceptable, use defaults
 		req.Model = ""
 		req.Temperature = nil
+	}
+
+	// Validate request
+	if err := ch.validator.ValidateSummarizeRequest(req.Temperature); err != nil {
+		ch.sendError(w, http.StatusBadRequest, "Validation failed", err)
+		return
 	}
 
 	// Get user from database
@@ -819,55 +886,13 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 
 	// Check if there's an existing active summary
 	activeSummary, err := ch.config.DB.GetActiveSummary(convID)
-	var messagesToSummarize []llm.Message
-	var lastMessageID *string
+	if err != nil {
+		activeSummary = nil // Treat error as no summary
+	}
 
-	if err != nil || activeSummary == nil {
-		// No active summary exists - summarize all messages
-		logger.Log.Info("No active summary found, summarizing all messages")
-		messagesToSummarize, err = ch.config.DB.GetConversationMessages(convID)
-		if err != nil {
-			logger.Log.WithError(err).Error("Error getting conversation messages for summarization")
-			ch.sendError(w, http.StatusInternalServerError, "Error retrieving messages", err)
-			return
-		}
-
-		// Get the last message ID
-		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
-		if err != nil {
-			logger.Log.WithError(err).Error("Error getting last message ID")
-			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
-			return
-		}
-	} else if activeSummary.UsageCount >= 2 {
-		// Summary has been used 2+ times - create new summary from old summary + new messages
-		logger.Log.WithField("usage_count", activeSummary.UsageCount).Info("Creating new summary from active summary")
-
-		// Start with the old summary as a "system" message
-		messagesToSummarize = []llm.Message{
-			{Role: "assistant", Content: fmt.Sprintf("Previous summary:\n%s", activeSummary.SummaryContent)},
-		}
-
-		// Get messages after the last summarized message
-		if activeSummary.SummarizedUpToMessageID != nil {
-			newMessages, err := ch.config.DB.GetMessagesAfterMessage(convID, *activeSummary.SummarizedUpToMessageID)
-			if err != nil {
-				logger.Log.WithError(err).Error("Error getting messages after last summarized")
-				ch.sendError(w, http.StatusInternalServerError, "Error retrieving new messages", err)
-				return
-			}
-			messagesToSummarize = append(messagesToSummarize, newMessages...)
-		}
-
-		// Get the last message ID
-		lastMessageID, err = ch.config.DB.GetLastMessageID(convID)
-		if err != nil {
-			logger.Log.WithError(err).Error("Error getting last message ID")
-			ch.sendError(w, http.StatusInternalServerError, "Error retrieving last message", err)
-			return
-		}
-	} else {
-		// Summary exists but hasn't been used enough yet - don't create new summary
+	// Check if we should create a new summary
+	if !ch.shouldCreateNewSummary(activeSummary) {
+		// Summary exists but hasn't been used enough yet - return existing summary
 		logger.Log.WithField("usage_count", activeSummary.UsageCount).Info("Active summary exists, not creating new summary")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(SummarizeResponse{
@@ -875,6 +900,14 @@ func (ch *ChatHandlers) SummarizeConversationHandler(w http.ResponseWriter, r *h
 			SummarizedUpToMsgID: *activeSummary.SummarizedUpToMessageID,
 			ConversationID:      convID,
 		})
+		return
+	}
+
+	// Build messages to summarize based on summary state
+	messagesToSummarize, lastMessageID, err := ch.buildSummarizationInput(convID, activeSummary)
+	if err != nil {
+		logger.Log.WithError(err).Error("Error building summarization input")
+		ch.sendError(w, http.StatusInternalServerError, "Error preparing messages for summarization", err)
 		return
 	}
 
