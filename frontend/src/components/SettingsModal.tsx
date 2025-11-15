@@ -7,57 +7,44 @@ import { WarAndPeaceSettings } from './Settings/WarAndPeaceSettings';
 import { ModelSettings } from './Settings/ModelSettings';
 import { FormatSettings } from './Settings/FormatSettings';
 import { PromptSettings } from './Settings/PromptSettings';
+import { useSettingsStore, type ResponseFormat, type ProviderType } from '../stores';
 
-export type ResponseFormat = 'text' | 'json' | 'xml';
-export type ProviderType = 'openrouter' | 'genkit';
+// Re-export types for backward compatibility
+export type { ResponseFormat, ProviderType };
 
 interface SettingsModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  systemPrompt: string;
-  onSystemPromptChange: (prompt: string) => void;
-  responseFormat: ResponseFormat;
-  onResponseFormatChange: (format: ResponseFormat) => void;
-  responseSchema: string;
-  onResponseSchemaChange: (schema: string) => void;
-  conversationFormat?: ResponseFormat | null;
+  conversationFormat?: ResponseFormat;
   conversationSchema?: string;
   isExistingConversation: boolean;
-  selectedModel: string;
-  onModelChange: (model: string) => void;
-  temperature: number;
-  onTemperatureChange: (temperature: number) => void;
-  provider: ProviderType;
-  onProviderChange: (provider: ProviderType) => void;
-  useWarAndPeace: boolean;
-  onUseWarAndPeaceChange: (use: boolean) => void;
-  warAndPeacePercent: number;
-  onWarAndPeacePercentChange: (percent: number) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
-  isOpen,
-  onClose,
-  systemPrompt,
-  onSystemPromptChange,
-  responseFormat,
-  onResponseFormatChange,
-  responseSchema,
-  onResponseSchemaChange,
   conversationFormat,
   conversationSchema,
   isExistingConversation,
-  selectedModel,
-  onModelChange,
-  temperature,
-  onTemperatureChange,
-  provider,
-  onProviderChange,
-  useWarAndPeace,
-  onUseWarAndPeaceChange,
-  warAndPeacePercent,
-  onWarAndPeacePercentChange,
 }) => {
+  // Get state and actions from Zustand store
+  const {
+    systemPrompt,
+    responseFormat,
+    responseSchema,
+    selectedModel,
+    temperature,
+    provider,
+    useWarAndPeace,
+    warAndPeacePercent,
+    settingsOpen: isOpen,
+    setSystemPrompt,
+    setResponseFormat,
+    setResponseSchema,
+    setModel,
+    setTemperature,
+    setProvider,
+    setUseWarAndPeace,
+    setWarAndPeacePercent,
+    setSettingsOpen
+  } = useSettingsStore();
+
   // Initialize with the correct format from the start
   const initialFormat = conversationFormat || responseFormat;
   const initialSchema = (conversationSchema !== undefined && conversationSchema !== '') ? conversationSchema : responseSchema;
@@ -120,17 +107,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   console.log('[SettingsModal] Render with:', { displayFormat, tempFormat, conversationFormat, isExistingConversation });
 
   const handleSave = () => {
-    onSystemPromptChange(tempPrompt);
-    onModelChange(tempModel);
-    onTemperatureChange(tempTemperature);
-    onProviderChange(tempProvider);
-    onWarAndPeacePercentChange(tempWarAndPeacePercent);
+    setSystemPrompt(tempPrompt);
+    setModel(tempModel);
+    setTemperature(tempTemperature);
+    setProvider(tempProvider);
+    setWarAndPeacePercent(tempWarAndPeacePercent);
     // Only save format changes if it's a new conversation
     if (!isExistingConversation) {
-      onResponseFormatChange(tempFormat);
-      onResponseSchemaChange(tempSchema);
+      setResponseFormat(tempFormat);
+      setResponseSchema(tempSchema);
     }
-    onClose();
+    setSettingsOpen(false);
   };
 
   const handleCancel = () => {
@@ -141,7 +128,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTempTemperature(temperature);
     setTempProvider(provider);
     setTempWarAndPeacePercent(warAndPeacePercent);
-    onClose();
+    setSettingsOpen(false);
   };
 
   if (!isOpen) return null;
@@ -178,7 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <WarAndPeaceSettings
             useWarAndPeace={useWarAndPeace}
             warAndPeacePercent={tempWarAndPeacePercent}
-            onUseWarAndPeaceChange={onUseWarAndPeaceChange}
+            onUseWarAndPeaceChange={setUseWarAndPeace}
             onWarAndPeacePercentChange={setTempWarAndPeacePercent}
             styles={styles}
           />

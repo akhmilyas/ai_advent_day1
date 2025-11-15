@@ -67,8 +67,11 @@ type ChatResponse struct {
 }
 
 type StreamMetadata struct {
-	GenerationID string
-	Usage        *ResponseUsage
+	GenerationID   string
+	Usage          *ResponseUsage
+	TotalCost      *float64
+	Latency        *int
+	GenerationTime *int
 }
 
 type StreamChunk struct {

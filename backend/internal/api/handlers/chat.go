@@ -228,8 +228,22 @@ func (ch *ChatHandlers) ChatStreamHandler(w http.ResponseWriter, r *http.Request
 			// Final chunk with usage metadata
 			usage = streamChunk.Metadata.Usage
 			if usage != nil {
-				fmt.Fprintf(w, "data: USAGE:{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}\n\n",
+				// Build usage JSON with optional fields
+				usageJSON := fmt.Sprintf("{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d",
 					usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+
+				if streamChunk.Metadata.TotalCost != nil {
+					usageJSON += fmt.Sprintf(",\"total_cost\":%.6f", *streamChunk.Metadata.TotalCost)
+				}
+				if streamChunk.Metadata.Latency != nil {
+					usageJSON += fmt.Sprintf(",\"latency\":%d", *streamChunk.Metadata.Latency)
+				}
+				if streamChunk.Metadata.GenerationTime != nil {
+					usageJSON += fmt.Sprintf(",\"generation_time\":%d", *streamChunk.Metadata.GenerationTime)
+				}
+				usageJSON += "}"
+
+				fmt.Fprintf(w, "data: USAGE:%s\n\n", usageJSON)
 				flusher.Flush()
 				logger.Log.WithField("total_tokens", usage.TotalTokens).Debug("Sent usage data to client")
 			}

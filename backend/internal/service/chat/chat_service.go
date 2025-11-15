@@ -260,7 +260,10 @@ func (s *ChatService) SendMessageStream(req SendMessageRequest) (<-chan StreamMe
 		// Send final metadata chunk with usage info
 		if promptTokens != nil || totalCost != nil {
 			metadata := &llm.StreamMetadata{
-				GenerationID: generationID,
+				GenerationID:   generationID,
+				TotalCost:      totalCost,
+				Latency:        latency,
+				GenerationTime: generationTime,
 			}
 			if promptTokens != nil {
 				metadata.Usage = &llm.ResponseUsage{

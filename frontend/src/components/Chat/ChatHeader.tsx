@@ -9,7 +9,7 @@ import { LogoutButton } from './LogoutButton';
 interface ChatHeaderProps {
   conversationTitle: string;
   model: string;
-  conversationFormat: string | null;
+  conversationFormat: string | undefined;
   showSummarizeButton: boolean;
   summarizing: boolean;
   onSummarize: () => void;

@@ -17,7 +17,7 @@ interface MessageProps {
   totalCost?: number;
   latency?: number;
   generationTime?: number;
-  conversationFormat: ResponseFormat | null;
+  conversationFormat: ResponseFormat | undefined;
   colors: ReturnType<typeof getTheme>;
 }
 

@@ -26,7 +26,7 @@ interface Summary {
 interface ChatMessagesProps {
   messages: ChatMessage[];
   summaries: Summary[];
-  conversationFormat: ResponseFormat | null;
+  conversationFormat: ResponseFormat | undefined;
   messagesEndRef: React.RefObject<HTMLDivElement>;
 }
 

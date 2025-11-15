@@ -3,26 +3,12 @@ import { ChatService } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
-import { SettingsModal, ResponseFormat, ProviderType } from './SettingsModal';
+import { SettingsModal } from './SettingsModal';
 import { Sidebar } from './Sidebar';
 import { ChatHeader } from './Chat/ChatHeader';
 import { ChatMessages } from './Chat/ChatMessages';
 import { ChatInput } from './Chat/ChatInput';
-import { useLocalStorage } from '../hooks';
-
-interface ChatMessage {
-  id?: string;
-  role: 'user' | 'assistant';
-  content: string;
-  model?: string;
-  temperature?: number;
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
-  totalCost?: number;
-  latency?: number;
-  generationTime?: number;
-}
+import { useChatStore, useSettingsStore, type ResponseFormat } from '../stores';
 
 interface ChatProps {
   onLogout: () => void;
@@ -31,26 +17,47 @@ interface ChatProps {
 export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
-  const [conversationTitle, setConversationTitle] = useState<string>('');
-  const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
-  const [conversationSchema, setConversationSchema] = useState<string>('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [summarizing, setSummarizing] = useState(false);
-  const [summaries, setSummaries] = useState<Array<{ upToMessageId: string; content: string }>>([]);
 
-  // Use localStorage hook for persisted state
-  const [systemPrompt, setSystemPrompt] = useLocalStorage<string>('systemPrompt', '');
-  const [responseFormat, setResponseFormat] = useLocalStorage<ResponseFormat>('responseFormat', 'text');
-  const [responseSchema, setResponseSchema] = useLocalStorage<string>('responseSchema', '');
-  const [model, setModel] = useLocalStorage<string>('selectedModel', '');
-  const [temperature, setTemperature] = useLocalStorage<number>('temperature', 0.7);
-  const [provider, setProvider] = useLocalStorage<ProviderType>('provider', 'openrouter');
-  const [useWarAndPeace, setUseWarAndPeace] = useLocalStorage<boolean>('useWarAndPeace', false);
-  const [warAndPeacePercent, setWarAndPeacePercent] = useLocalStorage<number>('warAndPeacePercent', 100);
+  // Zustand stores
+  const {
+    messages,
+    conversationId,
+    conversationTitle,
+    conversationFormat,
+    conversationSchema,
+    isLoading,
+    summaries,
+    setMessages,
+    addMessage,
+    updateLastMessage,
+    updateLastMessageMetadata,
+    setConversationId,
+    setConversationTitle,
+    setConversationFormat,
+    setConversationSchema,
+    setLoading,
+    setSummaries,
+    addSummary,
+    reset
+  } = useChatStore();
+
+  const {
+    selectedModel,
+    temperature,
+    systemPrompt,
+    responseFormat,
+    responseSchema,
+    provider,
+    useWarAndPeace,
+    warAndPeacePercent,
+    settingsOpen,
+    setModel,
+    setSettingsOpen
+  } = useSettingsStore();
+
+  // Local state
+  const [input, setInput] = useState('');
+  const [summarizing, setSummarizing] = useState(false);
 
   const chatService = useMemo(() => new ChatService(), []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -58,7 +65,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
   // Load default model if no model is selected
   useEffect(() => {
-    if (!model) {
+    if (!selectedModel) {
       const fetchDefaultModel = async () => {
         try {
           const models = await chatService.getAvailableModels();
@@ -71,7 +78,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       };
       fetchDefaultModel();
     }
-  }, [model, chatService, setModel]);
+  }, [selectedModel, chatService, setModel]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -124,28 +131,22 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   };
 
   const handleNewConversation = () => {
-    setConversationId(undefined);
-    setConversationTitle('');
-    setMessages([]);
-    setModel('');
-    setConversationFormat(null);
-    setConversationSchema('');
-    setSummaries([]);
+    reset();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
     setInput('');
     setLoading(true);
 
     // Optimistically add user message to UI
-    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    addMessage({ role: 'user', content: userMessage });
 
     // Add empty assistant message that will be filled in via streaming
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+    addMessage({ role: 'assistant', content: '' });
 
     try {
       // Stream the response and update the assistant message
@@ -153,16 +154,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
         userMessage,
         (chunk) => {
           // Update the last message (assistant) with the new chunk
-          setMessages((prev) => {
-            const updated = [...prev];
-            if (updated[updated.length - 1].role === 'assistant') {
-              updated[updated.length - 1] = {
-                ...updated[updated.length - 1],
-                content: updated[updated.length - 1].content + chunk,
-              };
-            }
-            return updated;
-          });
+          updateLastMessage(chunk);
         },
         (convId) => {
           // Set conversation ID when received from server
@@ -177,57 +169,30 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
             }
           }
         },
-        conversationId,
+        conversationId || undefined,
         (modelName) => {
-          // Set model when received from server
-          setModel(modelName);
-          // Update the last message (assistant) with the model
-          setMessages((prev) => {
-            const updated = [...prev];
-            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
-              updated[updated.length - 1] = {
-                ...updated[updated.length - 1],
-                model: modelName,
-              };
-            }
-            return updated;
-          });
+          // Update the last message with model metadata
+          updateLastMessageMetadata({ model: modelName });
         },
         systemPrompt,
         // Only send format/schema for new conversations
         conversationId ? undefined : responseFormat,
         conversationId ? undefined : responseSchema,
-        model || undefined,
+        selectedModel || undefined,
         temperature,
         (temp) => {
-          // Update the last message (assistant) with the temperature
-          setMessages((prev) => {
-            const updated = [...prev];
-            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
-              updated[updated.length - 1] = {
-                ...updated[updated.length - 1],
-                temperature: temp,
-              };
-            }
-            return updated;
-          });
+          // Update the last message with temperature metadata
+          updateLastMessageMetadata({ temperature: temp });
         },
         (usage) => {
-          // Update the last message (assistant) with usage data
-          setMessages((prev) => {
-            const updated = [...prev];
-            if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
-              updated[updated.length - 1] = {
-                ...updated[updated.length - 1],
-                promptTokens: usage.prompt_tokens,
-                completionTokens: usage.completion_tokens,
-                totalTokens: usage.total_tokens,
-                totalCost: usage.total_cost,
-                latency: usage.latency,
-                generationTime: usage.generation_time,
-              };
-            }
-            return updated;
+          // Update the last message with usage metadata
+          updateLastMessageMetadata({
+            promptTokens: usage.prompt_tokens,
+            completionTokens: usage.completion_tokens,
+            totalTokens: usage.total_tokens,
+            totalCost: usage.total_cost,
+            latency: usage.latency,
+            generationTime: usage.generation_time
           });
         },
         provider,
@@ -237,16 +202,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       setLoading(false);
     } catch (error) {
       console.error('Error sending message:', error);
-      setMessages((prev) => {
-        const updated = [...prev];
-        if (updated[updated.length - 1].role === 'assistant') {
-          updated[updated.length - 1] = {
-            ...updated[updated.length - 1],
-            content: 'Error: Failed to get response',
-          };
-        }
-        return updated;
-      });
+      const updated = [...messages];
+      if (updated[updated.length - 1].role === 'assistant') {
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          content: 'Error: Failed to get response',
+        };
+      }
+      setMessages(updated);
       setLoading(false);
     }
   };
@@ -256,14 +219,14 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
     setSummarizing(true);
     try {
-      const result = await chatService.summarizeConversation(conversationId, model, temperature);
+      const result = await chatService.summarizeConversation(conversationId, selectedModel, temperature);
 
       // Add the new summary to the list
       if (result.summarized_up_to_message_id && result.summary) {
-        setSummaries(prev => [...prev, {
+        addSummary({
           upToMessageId: result.summarized_up_to_message_id,
           content: result.summary
-        }]);
+        });
       }
 
       // Reload messages from server to get the IDs
@@ -313,7 +276,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       <div style={{ ...styles.container, backgroundColor: colors.background }}>
         <ChatHeader
           conversationTitle={conversationTitle}
-          model={model}
+          model={selectedModel}
           conversationFormat={conversationFormat}
           showSummarizeButton={conversationId !== undefined && messages.length > 0}
           summarizing={summarizing}
@@ -333,31 +296,13 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           value={input}
           onChange={setInput}
           onSubmit={handleSubmit}
-          loading={loading}
+          loading={isLoading}
         />
 
         <SettingsModal
-          isOpen={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          systemPrompt={systemPrompt}
-          onSystemPromptChange={setSystemPrompt}
-          responseFormat={responseFormat}
-          onResponseFormatChange={setResponseFormat}
-          responseSchema={responseSchema}
-          onResponseSchemaChange={setResponseSchema}
           conversationFormat={conversationFormat}
           conversationSchema={conversationSchema}
           isExistingConversation={conversationId !== undefined}
-          selectedModel={model}
-          onModelChange={setModel}
-          temperature={temperature}
-          onTemperatureChange={setTemperature}
-          provider={provider}
-          onProviderChange={setProvider}
-          useWarAndPeace={useWarAndPeace}
-          onUseWarAndPeaceChange={setUseWarAndPeace}
-          warAndPeacePercent={warAndPeacePercent}
-          onWarAndPeacePercentChange={setWarAndPeacePercent}
         />
       </div>
     </div>
