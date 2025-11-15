@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChatService } from '../services/chat';
 import { AuthService } from '../services/auth';
 import { useTheme } from '../contexts/ThemeContext';
@@ -8,6 +8,7 @@ import { Sidebar } from './Sidebar';
 import { ChatHeader } from './Chat/ChatHeader';
 import { ChatMessages } from './Chat/ChatMessages';
 import { ChatInput } from './Chat/ChatInput';
+import { useLocalStorage } from '../hooks';
 
 interface ChatMessage {
   id?: string;
@@ -35,53 +36,34 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [conversationTitle, setConversationTitle] = useState<string>('');
-  const [model, setModel] = useState<string>('');
-  const [systemPrompt, setSystemPrompt] = useState<string>('');
-  const [responseFormat, setResponseFormat] = useState<ResponseFormat>('text');
-  const [responseSchema, setResponseSchema] = useState<string>('');
   const [conversationFormat, setConversationFormat] = useState<ResponseFormat | null>(null);
   const [conversationSchema, setConversationSchema] = useState<string>('');
-  const [temperature, setTemperature] = useState<number>(0.7);
-  const [provider, setProvider] = useState<ProviderType>('openrouter');
-  const [useWarAndPeace, setUseWarAndPeace] = useState<boolean>(false);
-  const [warAndPeacePercent, setWarAndPeacePercent] = useState<number>(100);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [summaries, setSummaries] = useState<Array<{ upToMessageId: string; content: string }>>([]);
-  const chatService = useRef(new ChatService());
+
+  // Use localStorage hook for persisted state
+  const [systemPrompt, setSystemPrompt] = useLocalStorage<string>('systemPrompt', '');
+  const [responseFormat, setResponseFormat] = useLocalStorage<ResponseFormat>('responseFormat', 'text');
+  const [responseSchema, setResponseSchema] = useLocalStorage<string>('responseSchema', '');
+  const [model, setModel] = useLocalStorage<string>('selectedModel', '');
+  const [temperature, setTemperature] = useLocalStorage<number>('temperature', 0.7);
+  const [provider, setProvider] = useLocalStorage<ProviderType>('provider', 'openrouter');
+  const [useWarAndPeace, setUseWarAndPeace] = useLocalStorage<boolean>('useWarAndPeace', false);
+  const [warAndPeacePercent, setWarAndPeacePercent] = useLocalStorage<number>('warAndPeacePercent', 100);
+
+  const chatService = useMemo(() => new ChatService(), []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<{ refreshConversations: () => Promise<void> }>(null);
 
-  // Load settings from localStorage on mount
+  // Load default model if no model is selected
   useEffect(() => {
-    const savedPrompt = localStorage.getItem('systemPrompt');
-    const savedFormat = localStorage.getItem('responseFormat');
-    const savedSchema = localStorage.getItem('responseSchema');
-    const savedModel = localStorage.getItem('selectedModel');
-    const savedTemperature = localStorage.getItem('temperature');
-    const savedProvider = localStorage.getItem('provider');
-    const savedUseWarAndPeace = localStorage.getItem('useWarAndPeace');
-    const savedWarAndPeacePercent = localStorage.getItem('warAndPeacePercent');
-
-    if (savedPrompt) {
-      setSystemPrompt(savedPrompt);
-    }
-    if (savedFormat && (savedFormat === 'text' || savedFormat === 'json' || savedFormat === 'xml')) {
-      setResponseFormat(savedFormat as ResponseFormat);
-    }
-    if (savedSchema) {
-      setResponseSchema(savedSchema);
-    }
-    if (savedModel) {
-      setModel(savedModel);
-    } else {
-      // If no saved model, fetch and use the first model from config as default
+    if (!model) {
       const fetchDefaultModel = async () => {
         try {
-          const models = await chatService.current.getAvailableModels();
+          const models = await chatService.getAvailableModels();
           if (models.length > 0) {
             setModel(models[0].id);
-            localStorage.setItem('selectedModel', models[0].id);
           }
         } catch (error) {
           console.error('[Chat] Failed to fetch default model:', error);
@@ -89,77 +71,19 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       };
       fetchDefaultModel();
     }
-    if (savedTemperature) {
-      const temp = parseFloat(savedTemperature);
-      if (!isNaN(temp)) {
-        setTemperature(temp);
-      }
-    }
-    if (savedProvider && (savedProvider === 'openrouter' || savedProvider === 'genkit')) {
-      setProvider(savedProvider as ProviderType);
-    }
-    if (savedUseWarAndPeace === 'true') {
-      setUseWarAndPeace(true);
-    }
-    if (savedWarAndPeacePercent) {
-      const percent = parseInt(savedWarAndPeacePercent);
-      if (!isNaN(percent) && percent >= 0 && percent <= 100) {
-        setWarAndPeacePercent(percent);
-      }
-    }
-  }, []);
+  }, [model, chatService, setModel]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSystemPromptChange = (prompt: string) => {
-    setSystemPrompt(prompt);
-    localStorage.setItem('systemPrompt', prompt);
-  };
-
-  const handleResponseFormatChange = (format: ResponseFormat) => {
-    setResponseFormat(format);
-    localStorage.setItem('responseFormat', format);
-  };
-
-  const handleResponseSchemaChange = (schema: string) => {
-    setResponseSchema(schema);
-    localStorage.setItem('responseSchema', schema);
-  };
-
-  const handleModelChange = (modelId: string) => {
-    setModel(modelId);
-    localStorage.setItem('selectedModel', modelId);
-  };
-
-  const handleTemperatureChange = (temp: number) => {
-    setTemperature(temp);
-    localStorage.setItem('temperature', temp.toString());
-  };
-
-  const handleProviderChange = (prov: ProviderType) => {
-    setProvider(prov);
-    localStorage.setItem('provider', prov);
-  };
-
-  const handleUseWarAndPeaceChange = (use: boolean) => {
-    setUseWarAndPeace(use);
-    localStorage.setItem('useWarAndPeace', use.toString());
-  };
-
-  const handleWarAndPeacePercentChange = (percent: number) => {
-    setWarAndPeacePercent(percent);
-    localStorage.setItem('warAndPeacePercent', percent.toString());
-  };
-
   const handleSelectConversation = async (convId: string, title: string) => {
     try {
       // Get conversation details to retrieve format and schema
-      const conversations = await chatService.current.getConversations();
+      const conversations = await chatService.getConversations();
       const conversation = conversations.find(c => c.id === convId);
 
-      const convMessages = await chatService.current.getConversationMessages(convId);
+      const convMessages = await chatService.getConversationMessages(convId);
       setConversationId(convId);
       setConversationTitle(title);
 
@@ -170,7 +94,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
         // Load all summaries for this conversation from backend
         try {
-          const loadedSummaries = await chatService.current.getConversationSummaries(convId);
+          const loadedSummaries = await chatService.getConversationSummaries(convId);
           setSummaries(loadedSummaries);
         } catch (error) {
           console.error('Error loading summaries:', error);
@@ -225,7 +149,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
     try {
       // Stream the response and update the assistant message
-      await chatService.current.streamMessage(
+      await chatService.streamMessage(
         userMessage,
         (chunk) => {
           // Update the last message (assistant) with the new chunk
@@ -332,7 +256,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
 
     setSummarizing(true);
     try {
-      const result = await chatService.current.summarizeConversation(conversationId, model, temperature);
+      const result = await chatService.summarizeConversation(conversationId, model, temperature);
 
       // Add the new summary to the list
       if (result.summarized_up_to_message_id && result.summary) {
@@ -343,7 +267,7 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
       }
 
       // Reload messages from server to get the IDs
-      const convMessages = await chatService.current.getConversationMessages(conversationId);
+      const convMessages = await chatService.getConversationMessages(conversationId);
       setMessages(
         convMessages.map((msg) => ({
           id: msg.id,
@@ -416,24 +340,24 @@ export const Chat: React.FC<ChatProps> = ({ onLogout }) => {
           isOpen={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           systemPrompt={systemPrompt}
-          onSystemPromptChange={handleSystemPromptChange}
+          onSystemPromptChange={setSystemPrompt}
           responseFormat={responseFormat}
-          onResponseFormatChange={handleResponseFormatChange}
+          onResponseFormatChange={setResponseFormat}
           responseSchema={responseSchema}
-          onResponseSchemaChange={handleResponseSchemaChange}
+          onResponseSchemaChange={setResponseSchema}
           conversationFormat={conversationFormat}
           conversationSchema={conversationSchema}
           isExistingConversation={conversationId !== undefined}
           selectedModel={model}
-          onModelChange={handleModelChange}
+          onModelChange={setModel}
           temperature={temperature}
-          onTemperatureChange={handleTemperatureChange}
+          onTemperatureChange={setTemperature}
           provider={provider}
-          onProviderChange={handleProviderChange}
+          onProviderChange={setProvider}
           useWarAndPeace={useWarAndPeace}
-          onUseWarAndPeaceChange={handleUseWarAndPeaceChange}
+          onUseWarAndPeaceChange={setUseWarAndPeace}
           warAndPeacePercent={warAndPeacePercent}
-          onWarAndPeacePercentChange={handleWarAndPeacePercentChange}
+          onWarAndPeacePercentChange={setWarAndPeacePercent}
         />
       </div>
     </div>

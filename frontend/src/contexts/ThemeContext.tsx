@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
+import { useLocalStorage } from '../hooks';
 
 export type Theme = 'light' | 'dark';
 
@@ -9,24 +10,20 @@ export interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+// Get initial theme from system preference if no saved preference exists
+const getInitialTheme = (): Theme => {
+  // Check system preference
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    return 'dark';
+  }
+  return 'light';
+};
+
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [theme, setTheme] = useState<Theme>(() => {
-    // Get theme from localStorage or use system preference
-    const saved = localStorage.getItem('theme') as Theme | null;
-    if (saved) {
-      return saved;
-    }
-    // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
-    }
-    return 'light';
-  });
+  const [theme, setTheme] = useLocalStorage<Theme>('theme', getInitialTheme());
 
   useEffect(() => {
-    // Save theme to localStorage
-    localStorage.setItem('theme', theme);
-    // Update document class for global CSS if needed
+    // Update document attribute for global CSS if needed
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 

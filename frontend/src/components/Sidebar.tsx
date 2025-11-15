@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useImperativeHandle } from 'react';
-import { ChatService, Conversation } from '../services/chat';
+import React, { useImperativeHandle } from 'react';
+import { Conversation } from '../services/chat';
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
+import { useConversations } from '../hooks';
 
 interface SidebarProps {
   onSelectConversation: (conversationId: string, title: string) => void;
@@ -25,33 +26,13 @@ export const Sidebar = React.forwardRef<
   ) => {
     const { theme } = useTheme();
     const colors = getTheme(theme === 'dark');
-    const [conversations, setConversations] = useState<Conversation[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const chatService = React.useMemo(() => new ChatService(), []);
 
-    useEffect(() => {
-      loadConversations();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    // Use custom hook for conversation management
+    const { conversations, loading, error, refresh, deleteConversation } = useConversations();
 
     useImperativeHandle(ref, () => ({
-      refreshConversations: loadConversations,
+      refreshConversations: refresh,
     }));
-
-    const loadConversations = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const convs = await chatService.getConversations();
-        setConversations(convs);
-      } catch (err) {
-        console.error('Error loading conversations:', err);
-        setError('Failed to load conversations');
-      } finally {
-        setLoading(false);
-      }
-    };
 
     const styles = getStyles(colors);
 
@@ -84,13 +65,11 @@ export const Sidebar = React.forwardRef<
                 onSelect={() => onSelectConversation(conv.id, conv.title)}
                 onDelete={async () => {
                   try {
-                    await chatService.deleteConversation(conv.id);
+                    await deleteConversation(conv.id);
                     // If deleted conversation is currently selected, clear it
                     if (currentConversationId === conv.id) {
                       onNewConversation();
                     }
-                    // Refresh the list
-                    await loadConversations();
                   } catch (error) {
                     console.error('Error deleting conversation:', error);
                     alert('Failed to delete conversation');
