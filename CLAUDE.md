@@ -23,12 +23,15 @@ go build -o server ./cmd/server
 ```
 
 ### Manual Frontend Build & Run
+Built with **Vite** (not Create React App)
+
 ```bash
 cd frontend
 npm install
-npm run build             # Production build
-npm start                 # Development server (http://localhost:3000)
-npm test                  # Run tests
+npm run build             # Production build with Vite
+npm run dev               # Development server with HMR (http://localhost:3000)
+npm start                 # Alias for npm run dev
+npm test                  # Run tests with Vitest
 ```
 
 ### Testing
@@ -58,11 +61,13 @@ migrate -path migrations -database "postgres://postgres:postgres@localhost:5432/
 ### High-Level Design
 This is a fullstack chat application with **clean layered architecture**:
 
-1. **Frontend (React/TypeScript)** on port 3000
+1. **Frontend (React/TypeScript + Vite)** on port 3000
+   - Built with **Vite** for fast development and optimized production builds
+   - State management via **Zustand** with persist and devtools middleware
    - Single-page app with login/register and chat interface
    - Connects to backend via HTTP REST (auth, models) and Server-Sent Events (chat streaming)
-   - Client-side state: authentication tokens, theme preference, custom system prompts, selected model, temperature
-   - All stored in localStorage
+   - State: chat messages, conversations, settings (model, temperature, prompts, formats)
+   - Persistence: localStorage for auth tokens, preferences, and cached state
 
 2. **Backend (Go) - Clean Architecture** on port 8080
    - **API Layer** (`internal/api/handlers/`): HTTP request/response, auth middleware, SSE streaming
@@ -157,14 +162,15 @@ Service: Saves message to repository
   ↓
 Frontend: onChunk callback accumulates chunks
   - Unescape newlines (\\n → \n)
-  - Update UI incrementally
-  - Capture metadata from SSE events
+  - Update Zustand chatStore via updateLastMessage action
+  - Capture metadata via updateLastMessageMetadata action
+  - UI updates automatically via Zustand subscriptions
   ↓
 Frontend: Message component renders based on format
   - text: ReactMarkdown
   - json: renderJsonAsTree() with collapsible raw view
   - xml: renderXmlAsTree() with collapsible raw view
-  - Shows model name, temperature, and provider next to "AI" label
+  - Shows model, temperature, tokens, cost, latency, generation time
 ```
 
 ### Authentication Flow
@@ -275,7 +281,39 @@ if req.Provider == "genkit" {
 - Stored in `messages.provider` column (added in migration 000006)
 - Displayed in UI alongside model name
 
-### War and Peace Context Injection (New)
+### Vite Build System (New)
+Frontend built with **Vite** instead of Create React App for superior performance:
+
+**Build Performance**:
+- **87% faster builds**: 11-12s → 1.67s
+- **84% fewer dependencies**: 1,488 → 227 packages
+- **100% vulnerability reduction**: 27 → 0
+- **6.7% smaller bundle**: 116.72 KB → 108.88 KB gzipped
+
+**Configuration** (`vite.config.ts`):
+- Dev server on port 3000 with proxy to backend
+- Hot Module Replacement (HMR) for instant updates
+- Code splitting: react-vendor, markdown, zustand chunks
+- Source maps enabled for debugging
+
+**Environment Variables**:
+- Prefix: `VITE_` (not `REACT_APP_`)
+- Access: `import.meta.env.VITE_API_URL`
+- Type definitions in `src/vite-env.d.ts`
+
+**Build Output**:
+- Output directory: `build/` (same as CRA)
+- Production optimizations: minification, tree-shaking
+- Served via nginx in Docker container
+
+**Benefits**:
+- Instant dev server startup
+- Fast HMR without full reload
+- Native ES modules support
+- Better TypeScript integration
+- Smaller production bundles
+
+### War and Peace Context Injection
 Advanced feature for **testing context window handling**:
 
 **Implementation** (`internal/context/warandpeace.go`):
@@ -335,7 +373,9 @@ messages (
 - Both measured in milliseconds
 
 **Display**:
-- Cost and token data can be shown in UI (currently backend-only)
+- All metadata sent to frontend via SSE USAGE event
+- Frontend displays model, temperature, tokens, cost, latency, and generation time
+- Real-time updates during streaming using Zustand state management
 - Useful for analyzing model efficiency and costs
 
 ### SSE Streaming Over WebSocket
@@ -345,7 +385,7 @@ messages (
   - `CONV_ID:uuid-string` - Conversation ID for new conversations
   - `MODEL:model-name` - Model used for generating response
   - `TEMPERATURE:0.70` - Temperature used for generating response
-  - `USAGE:generation-id` - OpenRouter generation ID for cost tracking (NEW)
+  - `USAGE:{json}` - Complete usage metadata with tokens, cost, latency, generation_time
 
 ### Response Format System
 - **Three formats supported**: text (default), JSON, XML
@@ -403,11 +443,34 @@ Plus 4 additional models (check `config/models.json` for full list)
 - History retrieved in chronological order from repository
 - **Summary optimization**: If conversation has active summary, only sends messages after last summarized message
 
-### Frontend State Management
-- Minimal React state: messages, input, loading, conversationId, model, temperature, systemPrompt, responseFormat, responseSchema, conversationFormat, conversationSchema, theme, settingsOpen
-- No Redux/complex state library; useContext for theme, useState for component local state
-- localStorage for persistence: auth_token, theme, systemPrompt, responseFormat, responseSchema, selectedModel, temperature
-- Component separation: Message.tsx handles format-specific rendering and displays model/temperature, SettingsModal.tsx handles model selection and temperature slider
+### Frontend State Management (Zustand)
+The frontend uses **Zustand** for centralized state management with three stores:
+
+**Chat Store** (`src/stores/chatStore.ts`):
+- Chat messages, conversation ID/title/format/schema, summaries
+- Actions: addMessage, updateLastMessage, updateLastMessageMetadata, setConversationId, reset
+- Real-time metadata updates during streaming (model, temperature, tokens, cost, latency)
+
+**Settings Store** (`src/stores/settingsStore.ts`):
+- Model selection, temperature, system prompt, response format/schema
+- War and Peace settings, provider selection, settings modal state
+- Persisted to localStorage via Zustand persist middleware
+
+**Auth Store** (`src/stores/authStore.ts`):
+- Authentication token, user info, login/logout actions
+- Persisted to localStorage for session management
+
+**Benefits**:
+- Centralized state with minimal boilerplate
+- Built-in devtools middleware for debugging
+- Automatic localStorage persistence for settings and auth
+- Type-safe with TypeScript interfaces
+- No prop drilling - direct state access in any component
+
+**Component separation**:
+- Message.tsx handles format-specific rendering and displays metadata
+- SettingsModal.tsx handles model selection and parameter configuration
+- Chat.tsx orchestrates streaming and state updates
 
 ### UUID for All IDs
 - All database IDs use PostgreSQL UUID type (Universally Unique Identifiers)
@@ -510,7 +573,7 @@ schema_migrations (
 - `DB_PASSWORD` - PostgreSQL password (default: postgres)
 - `DB_NAME` - Database name (default: chatapp)
 - `DB_SSLMODE` - SSL mode (default: disable)
-- `REACT_APP_API_URL` - Backend URL for frontend (default: http://localhost:8080)
+- `VITE_API_URL` - Backend URL for frontend (default: http://localhost:8080, used by Vite)
 
 **Deprecated:**
 - `OPENROUTER_MODEL` - Model selection now via `backend/config/models.json`
@@ -727,14 +790,19 @@ default:
 ```typescript
 import { useTheme } from '../contexts/ThemeContext';
 import { getTheme } from '../themes';
+import { useChatStore, useSettingsStore } from '../stores';
 
 export default function NewComponent() {
   const { theme } = useTheme();
   const colors = getTheme(theme === 'dark');
 
+  // Access Zustand stores
+  const { messages, addMessage } = useChatStore();
+  const { selectedModel, setModel } = useSettingsStore();
+
   return (
     <div style={{ backgroundColor: colors.background }}>
-      {/* Component content */}
+      {/* Component content with access to global state */}
     </div>
   );
 }
@@ -750,7 +818,9 @@ import NewComponent from './NewComponent';
 
 **3. Follow existing patterns**:
 - Use `getTheme()` for consistent theming
-- Store state in localStorage for persistence
+- Use Zustand stores for state management (auto-persisted to localStorage)
+- Access stores via hooks: `useChatStore()`, `useSettingsStore()`, `useAuthStore()`
+- Update state via store actions, not direct mutations
 - Use fetch with JWT token for API calls
 
 ## Security Notes
@@ -815,9 +885,10 @@ docker compose up --build
 ## Testing Infrastructure
 
 **Frontend:**
-- Jest + React Testing Library (via react-scripts)
+- Vitest + React Testing Library (Vite-native testing)
 - Command: `cd frontend && npm test`
 - Component tests in same directory as components
+- Fast test execution with HMR
 - No snapshot tests configured
 
 **Backend:**
@@ -919,6 +990,8 @@ backend/
     chat_validator_test.go
 
 frontend/
+  index.html                      # Vite entry point (root level, not in public/)
+  vite.config.ts                  # Vite configuration (dev server, build, code splitting)
   src/
     components/                   # React components
       Chat.tsx                    # Main chat UI
@@ -926,12 +999,22 @@ frontend/
       Login.tsx                   # Auth forms
       SettingsModal.tsx           # Settings UI
       Sidebar.tsx                 # Conversation sidebar
+      Chat/                       # Chat subcomponents
+        ChatHeader.tsx
+        ChatMessages.tsx
+        ChatInput.tsx
     services/                     # API clients
       auth.ts                     # JWT token management
       chat.ts                     # Chat API calls, SSE parsing
+    stores/                       # Zustand state management
+      chatStore.ts                # Chat messages and conversation state
+      settingsStore.ts            # User preferences and settings
+      authStore.ts                # Authentication state
+      index.ts                    # Store exports
     contexts/                     # React contexts
       ThemeContext.tsx            # Theme state provider
     themes.ts                     # Color palettes
+    vite-env.d.ts                 # Vite TypeScript definitions
     App.tsx                       # Root component
     index.tsx                     # Entry point
 
@@ -999,17 +1082,23 @@ data: {"choices":[{"delta":{"content":"Hello"}}]}
 data: {"choices":[{"delta":{"content":" world"}}]}
 data: MODEL:meta-llama/llama-3.3-8b-instruct:free
 data: TEMPERATURE:0.70
-data: USAGE:gen_xyz123
+data: USAGE:{"prompt_tokens":150,"completion_tokens":25,"total_tokens":175,"total_cost":0.000042,"latency":234,"generation_time":1250}
 data: [DONE]
 ```
 
 ### Metadata Events (SSE with prefixes)
 - `CONV_ID:uuid-string` - Conversation ID for new conversations
 - `MODEL:model-name` - Model used for generating response
-- `TEMPERATURE:0.70` - Temperature used for generating response
-- `USAGE:generation-id` - OpenRouter generation ID for cost tracking (NEW)
+- `TEMPERATURE:0.70` - Temperature used for generating response (0.0-2.0)
+- `USAGE:{json}` - Complete usage metadata including:
+  - `prompt_tokens`: Tokens in prompt + history (required)
+  - `completion_tokens`: Tokens in assistant response (required)
+  - `total_tokens`: Sum of prompt and completion tokens (required)
+  - `total_cost`: Cost in USD (optional, if available from provider)
+  - `latency`: Time to first token in milliseconds (optional)
+  - `generation_time`: Total generation time in milliseconds (optional)
 
-Parsed by frontend: unescape newlines, collect chunks, capture metadata, skip [DONE]
+Parsed by frontend: unescape newlines, collect chunks, capture metadata via Zustand actions, skip [DONE]
 
 ## Conversation Summarization Feature
 
